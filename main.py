@@ -48,12 +48,11 @@ MEDALS = ["🥇", "🥈", "🥉"]
 _DEDUPE_WINDOW = 10  # 秒：相同操作去重窗口
 
 # ---------------- AI 裁判配置 ----------------
-AI_FLUSH_INTERVAL = 240        # 判决周期(秒)
-AI_BUFFER_MAX = 60             # 单群消息缓冲上限(上下文长度)
-AI_MIN_BATCH = 3               # 一轮至少多少条新发言才调用 LLM
+AI_FLUSH_INTERVAL = 60         # 持续监听的巡视频率(秒)，发现新证据即判罚
+AI_BUFFER_MAX = 60             # 单群上下文缓冲上限(条)
 AI_MAX_JUDGMENTS = 5           # 每轮最多判罚条数
 AI_SCORE_LIMIT = 3             # 单条判罚最大 ±3 分
-AI_JUDGE_HISTORY = 30          # 单人裁决取最近 N 条发言
+AI_JUDGE_HISTORY = 60          # 单人裁决上下文条数
 AI_MIN_TEXT = 4                # 短于该长度的不进缓冲
 AI_SYSTEM_PROMPT = (
     "你是群聊积分系统『智人排行榜』的 AI 裁判，宗旨：公平、公正、公开，只依据发言文本判罚。"
@@ -81,7 +80,7 @@ def _now() -> str:
     "astrbot_plugin_zhiren_leaderboard",
     "yunyancuo",
     "智人排行榜 — @成员加/扣一分记分、成员信息库、周榜自动播报、@bot 查询、内置 Web 排行榜界面",
-    "1.1.1",
+    "1.1.2",
 )
 class ZhirenLeaderboardPlugin(Star):
     def __init__(self, context: Context):
@@ -101,6 +100,8 @@ class ZhirenLeaderboardPlugin(Star):
         self._index_mtime: float = 0.0
         self._msg_buffer: dict[str, list[dict]] = {}
         self._ai_warned: set[str] = set()
+        self._seq: int = 0
+        self._ai_judged: set[int] = set()
 
     # ------------------------------------------------数据库
 
@@ -231,7 +232,7 @@ class ZhirenLeaderboardPlugin(Star):
 
         text = "".join(getattr(c, "text", "") for c in comps if isinstance(c, Plain))
 
-        # AI 裁判：非 @bot 的正常发言进入缓冲区，等待批量判决
+        # AI 裁判：非 @bot 的正常发言进入滚动上下文缓冲，持续监听
         if not bot_at and gid in self._ai_enabled:
             t_clean = text.strip()
             if len(t_clean) >= AI_MIN_TEXT:
@@ -239,8 +240,12 @@ class ZhirenLeaderboardPlugin(Star):
                 sender_uid = str(event.get_sender_id())
                 buf = self._msg_buffer.setdefault(gid, [])
                 if not buf or buf[-1]["uid"] != sender_uid or buf[-1]["text"] != t_clean:
-                    buf.append({"uid": sender_uid, "name": event.get_sender_name(), "text": t_clean})
+                    self._seq += 1
+                    buf.append({"seq": self._seq, "uid": sender_uid,
+                                "name": event.get_sender_name(), "text": t_clean})
                     if len(buf) > AI_BUFFER_MAX:
+                        for m in buf[: len(buf) - AI_BUFFER_MAX]:
+                            self._ai_judged.discard(m["seq"])
                         del buf[: len(buf) - AI_BUFFER_MAX]
 
         if bot_at:
@@ -345,27 +350,34 @@ class ZhirenLeaderboardPlugin(Star):
             return None
 
     @staticmethod
-    def _transcript(batch: list[dict]) -> str:
-        return "\n".join(
-            f"{i + 1}. [{m['uid']}] {m['name']}：{m['text']}"
-            for i, m in enumerate(batch)
-        )
+    def _transcript(batch: list[dict], judged: set[int] | None = None,
+                    target_uid: str | None = None) -> str:
+        """把缓冲区渲染成编号发言记录；已判罚的行标（已判），目标成员标【目标】。"""
+        judged = judged or set()
+        lines = []
+        for i, m in enumerate(batch):
+            mark = "（已判）" if m.get("seq") in judged else ""
+            tgt = "【目标】" if target_uid and m["uid"] == target_uid else ""
+            lines.append(f"{i + 1}. {tgt}[{m['uid']}] {m['name']}：{m['text']}{mark}")
+        return "\n".join(lines)
 
     async def _ai_score_messages(self, gid: str, batch: list[dict]) -> list[tuple[dict, int, str]]:
-        """调用 LLM 对一批发言判罚，返回 [(发言, delta, reason), ...]。失败返回 []。"""
+        """持续监听：把当前上下文交给 LLM，判罚其中尚未判过的发言。失败返回 []。"""
         provider = self._provider_for(gid)
         if provider is None:
             if gid not in self._ai_warned:
                 self._ai_warned.add(gid)
                 logger.warning("[智人排行榜] 未配置 LLM Provider，AI 裁判不可用")
             return []
+        judged_here = {m["seq"] for m in batch if m["seq"] in self._ai_judged}
         prompt = (
-            "以下是群聊最近发言记录（含上下文，格式：序号. [QQ号] 名字：内容）。"
+            "以下是持续监听中的群聊记录（含上下文，格式：序号. [QQ号] 名字：内容）。"
+            "标（已判）的发言此前已判罚过，不要重复判罚。"
             "请依据判罚标准，结合当事人连续发言与其他群友的反应，"
             f"挑出最多 {AI_MAX_JUDGMENTS} 条需要判罚的发言，"
-            f"每条给 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数分；普通发言不要输出。"
+            f"每条给 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数分；没有需要判罚的就输出 []。"
             '输出 JSON 数组：[{"id": 序号, "delta": 分数, "reason": "评语"}]，不要任何其他文字。\n\n'
-            + self._transcript(batch)
+            + self._transcript(batch, judged_here)
         )
         try:
             resp = await provider.text_chat(prompt=prompt, system_prompt=AI_SYSTEM_PROMPT)
@@ -374,7 +386,7 @@ class ZhirenLeaderboardPlugin(Star):
             return []
         raw = getattr(resp, "completion_text", "") or ""
         verdicts = []
-        seen: set[int] = set()
+        seen: set[str] = set()
         for item in extract_json_array(raw):
             if not isinstance(item, dict) or len(verdicts) >= AI_MAX_JUDGMENTS:
                 break
@@ -382,31 +394,34 @@ class ZhirenLeaderboardPlugin(Star):
                 idx = int(item.get("id")) - 1
             except Exception:
                 continue
-            if not (0 <= idx < len(batch)) or idx in seen:
+            if not (0 <= idx < len(batch)):
+                continue
+            m = batch[idx]
+            if m["seq"] in self._ai_judged or m["uid"] in seen:
                 continue
             delta = clamp_score(item.get("delta"), AI_SCORE_LIMIT)
             reason = str(item.get("reason", "")).strip()[:60]
             if delta == 0 or not reason:
                 continue
-            seen.add(idx)
-            verdicts.append((batch[idx], delta, reason))
+            seen.add(m["uid"])
+            verdicts.append((m, delta, reason))
+            self._ai_judged.add(m["seq"])
         return verdicts
 
     async def _ai_judge_member(self, gid: str, uid: str, name: str) -> list[tuple[dict, int, str]]:
-        """对单个成员的近期发言（含上下文与群友反应）做专项裁决。"""
-        msgs = [m for m in self._msg_buffer.get(gid, []) if m["uid"] == uid]
-        batch = msgs[-AI_JUDGE_HISTORY:]
-        if len(batch) < 2:
+        """对单个成员的近期言行（含完整上下文与群友反应）做专项裁决。"""
+        buf = self._msg_buffer.get(gid, [])
+        if len(buf) < 2:
             return []
         provider = self._provider_for(gid)
         if provider is None:
             return []
         prompt = (
-            f"以下是群成员「{name}」(QQ:{uid}) 在群聊上下文中的最近发言（其余为其他群友的发言与反应）。"
-            "请依据判罚标准，结合上下文与其他群友对其发言的反应，给出一个总判罚："
+            f"以下是群聊上下文记录。请专注评估成员「{name}」(QQ:{uid}) 的近期言行"
+            "（其发言已用【目标】标出），结合上下文与其他群友对其发言的反应，给出一个总判罚："
             f"delta 为 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数（0=证据不足不予判罚），"
             'reason 为不超过 15 字的评语。只输出 JSON：{"delta": 分数, "reason": "评语"}。\n\n'
-            + self._transcript(batch)
+            + self._transcript(buf, target_uid=uid)
         )
         try:
             resp = await provider.text_chat(prompt=prompt, system_prompt=AI_SYSTEM_PROMPT)
@@ -420,10 +435,11 @@ class ZhirenLeaderboardPlugin(Star):
         reason = str(obj.get("reason", "")).strip()[:60]
         if delta == 0 or not reason:
             return []
-        return [(dict(uid=uid, name=name, text=""), delta, reason)]
+        anchor = dict(uid=uid, name=name, seq=-1, text="")
+        return [(anchor, delta, reason)]
 
     async def _ai_flush_loop(self):
-        """定时把各群缓冲的发言交给 AI 裁判，判决公示到群里。"""
+        """持续监听：周期性巡视各群上下文，发现新证据立即判罚并公示。"""
         while True:
             try:
                 await asyncio.sleep(AI_FLUSH_INTERVAL)
@@ -431,11 +447,10 @@ class ZhirenLeaderboardPlugin(Star):
                     if gid not in self._ai_enabled:
                         self._msg_buffer.pop(gid, None)
                         continue
-                    batch = self._msg_buffer.get(gid) or []
-                    if len(batch) < AI_MIN_BATCH:
-                        continue
-                    self._msg_buffer[gid] = []
-                    verdicts = await self._ai_score_messages(gid, batch)
+                    buf = self._msg_buffer.get(gid) or []
+                    if not any(m["seq"] not in self._ai_judged for m in buf):
+                        continue  # 没有新证据，继续监听
+                    verdicts = await self._ai_score_messages(gid, buf)
                     if not verdicts:
                         continue
                     applied = []
@@ -457,7 +472,7 @@ class ZhirenLeaderboardPlugin(Star):
                 raise
             except Exception as e:
                 logger.error(f"[智人排行榜] AI 判决循环异常: {e!r}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
 
     # ------------------------------------------------查询
 
@@ -491,7 +506,8 @@ class ZhirenLeaderboardPlugin(Star):
             event.stop_event()
             yield event.plain_result(
                 f"🤖 AI 裁判已{'开启' if enable else '关闭'}"
-                + ("。我将依据德行/脏话/下头/智商/逆天标准，结合上下文与群友反应自动判罚，每 4 分钟开庭一次。"
+                + ("。现已持续监听群聊：依据德行/脏话/下头/智商/逆天标准，"
+                   "结合上下文与群友反应，发现逆天证据即刻判罚并公示。"
                    if enable else "")
             )
             return
@@ -501,7 +517,7 @@ class ZhirenLeaderboardPlugin(Star):
             n = len(self._msg_buffer.get(gid, []))
             yield event.plain_result(
                 f"🤖 AI 裁判：{'✅ 开启' if gid in self._ai_enabled else '❌ 关闭'}"
-                f"（已缓冲 {n}/{AI_BUFFER_MAX} 条，每 {AI_FLUSH_INTERVAL // 60} 分钟开庭）"
+                f"（持续监听中，上下文 {n}/{AI_BUFFER_MAX} 条，每 {AI_FLUSH_INTERVAL} 秒巡视一次）"
             )
             return
 
@@ -541,10 +557,10 @@ class ZhirenLeaderboardPlugin(Star):
                 )
                 return
             batch = self._msg_buffer.get(gid) or []
-            if len(batch) < AI_MIN_BATCH:
-                yield event.plain_result("🤖 发言缓冲不足，稍后再开庭")
+            unjudged = [m for m in batch if m["seq"] not in self._ai_judged]
+            if len(unjudged) < 2:
+                yield event.plain_result("🤖 新发言不足，稍后再开庭")
                 return
-            self._msg_buffer[gid] = []
             verdicts = await self._ai_score_messages(gid, batch)
             if not verdicts:
                 yield event.plain_result("🤖 本庭审议完毕：人人清白，无人被判罚")
@@ -724,7 +740,7 @@ class ZhirenLeaderboardPlugin(Star):
             "· AI裁判 状态 —— 查看状态\n"
             "· 评价 @某人 —— 对其近期发言专项裁决\n"
             "· 评价 —— 立即开庭审议当前上下文\n"
-            "开启后每 4 分钟自动开庭，依据德行/脏话/下头/智商/逆天标准，"
+            "开启后持续监听群聊（上下文 60 条，每分钟巡视），依据德行/脏话/下头/智商/逆天标准，"
             "结合上下文与群友反应判罚 ±3 分并公示\n\n"
             f"网页排行榜：http://<服务器IP>:{WEB_PORT}"
         )
