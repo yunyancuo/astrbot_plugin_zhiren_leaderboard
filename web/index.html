@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智人排行榜</title>
+<style>
+  :root{
+    --bg:#0b0f1a; --card:rgba(255,255,255,.045); --card-border:rgba(255,255,255,.08);
+    --text:#e7ecf5; --muted:#8a93a6; --accent:#6c8cff; --accent2:#22d3ee;
+    --plus:#34d399; --minus:#f87171; --gold:#fbbf24; --silver:#cbd5e1; --bronze:#f59e0b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(108,140,255,.14), transparent 60%),
+      radial-gradient(900px 400px at 0% 110%, rgba(34,211,238,.10), transparent 60%),
+      var(--bg);
+    color:var(--text); min-height:100%;
+  }
+  .wrap{max-width:860px;margin:0 auto;padding:32px 20px 80px}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+  .logo{width:46px;height:46px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));font-size:24px;box-shadow:0 8px 24px rgba(108,140,255,.35)}
+  h1{font-size:26px;letter-spacing:.5px}
+  h1 .en{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:13px;margin:6px 0 22px 60px}
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:18px}
+  select,input[type=search]{
+    background:var(--card);border:1px solid var(--card-border);color:var(--text);
+    border-radius:10px;padding:9px 12px;font-size:14px;outline:none;
+  }
+  select:focus,input:focus{border-color:var(--accent)}
+  .tabs{display:flex;background:var(--card);border:1px solid var(--card-border);border-radius:10px;padding:3px;margin-left:auto}
+  .tab{border:0;background:transparent;color:var(--muted);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:14px}
+  .tab.active{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-weight:600}
+  .week-chip{color:var(--muted);font-size:13px;margin-left:10px}
+  /* 前三名 */
+  .podium{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:26px 0 18px;align-items:end}
+  .p-card{background:var(--card);border:1px solid var(--card-border);border-radius:16px;padding:18px 12px;text-align:center;position:relative;overflow:hidden}
+  .p-card .medal{font-size:26px}
+  .p-card .avatar{width:52px;height:52px;border-radius:50%;margin:8px auto 8px;display:flex;align-items:center;justify-content:center;
+    font-size:22px;font-weight:700;color:#fff;background:linear-gradient(135deg,#5470ff,#22d3ee)}
+  .p-card.first{transform:scale(1.08);border-color:rgba(251,191,36,.45);box-shadow:0 10px 30px rgba(251,191,36,.12);z-index:1}
+  .p-card.first .avatar{background:linear-gradient(135deg,#f59e0b,#fbbf24)}
+  .p-card .name{font-weight:600;font-size:15px;margin-bottom:4px;word-break:break-all}
+  .p-card .score{font-size:26px;font-weight:800}
+  .p-card .delta{font-size:12px;color:var(--muted)}
+  /* 列表 */
+  .list{display:flex;flex-direction:column;gap:8px}
+  .row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--card-border);
+    border-radius:12px;padding:11px 14px;cursor:pointer;transition:.15s}
+  .row:hover{transform:translateX(3px);border-color:rgba(108,140,255,.4)}
+  .rank{width:30px;text-align:center;color:var(--muted);font-weight:700}
+  .rank.top{font-size:18px}
+  .avatar-s{width:34px;height:34px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+    font-size:15px;font-weight:700;color:#fff;background:linear-gradient(135deg,#5470ff,#22d3ee)}
+  .col-name{flex:1;min-width:0}
+  .nm{font-weight:600;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub-info{color:var(--muted);font-size:12px;margin-top:2px}
+  .pts{text-align:right}
+  .pts .v{font-size:20px;font-weight:800}
+  .pts .v.up{color:var(--plus)} .pts .v.down{color:var(--minus)}
+  .pts .d{font-size:11.5px;color:var(--muted)}
+  /* 抽屉 */
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:.2s;z-index:9}
+  .drawer{position:fixed;top:0;right:-420px;width:min(420px,92vw);height:100%;background:#111726;
+    border-left:1px solid var(--card-border);z-index:10;transition:right .25s;overflow-y:auto;padding:22px}
+  .drawer.open{right:0} .mask.open{opacity:1;pointer-events:auto}
+  .drawer h2{font-size:18px;margin-bottom:4px}
+  .drawer .close{position:absolute;top:16px;right:16px;background:none;border:0;color:var(--muted);font-size:22px;cursor:pointer}
+  .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}
+  .stat{background:var(--card);border:1px solid var(--card-border);border-radius:10px;padding:10px;text-align:center}
+  .stat .k{color:var(--muted);font-size:11.5px} .stat .v{font-size:18px;font-weight:700;margin-top:4px}
+  .rec{border-left:2px solid rgba(108,140,255,.3);margin:10px 0 10px 6px;padding:2px 0 2px 12px}
+  .rec .l1{font-size:13px} .rec .l2{color:var(--muted);font-size:12px;margin-top:2px}
+  .up-c{color:var(--plus)} .down-c{color:var(--minus)}
+  .empty{color:var(--muted);text-align:center;padding:60px 0;font-size:14px}
+  footer{margin-top:34px;color:var(--muted);font-size:12px;text-align:center;line-height:1.8}
+  @media (max-width:560px){ .podium{gap:8px} .p-card.first{transform:none} h1{font-size:21px} .sub{margin-left:0} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🏆</div>
+    <h1>智人<span class="en">排行榜</span></h1>
+  </header>
+  <div class="sub">@成员 加一分 / 扣一分 即时记分 · 每周一自动播报周榜 · 数据实时同步</div>
+
+  <div class="toolbar">
+    <select id="groupSel"></select>
+    <input type="search" id="search" placeholder="搜索成员…">
+    <div class="tabs">
+      <button class="tab active" data-tab="weekly">本周榜</button>
+      <button class="tab" data-tab="total">总分榜</button>
+    </div>
+    <span class="week-chip" id="weekChip"></span>
+  </div>
+  <div class="sub" id="curGroup" style="margin-top:-12px"></div>
+
+  <div class="podium" id="podium"></div>
+  <div class="list" id="list"></div>
+  <div class="empty" id="empty" style="display:none">暂无记录 —— 在群里发「@某成员 加一分 理由」开始记分吧</div>
+
+  <footer>
+    <span id="updatedAt"></span> · 每 30 秒自动刷新<br>
+    查询指令：@机器人 总分榜 ｜ 周榜 ｜ 查询 @某人 ｜ 我的得分
+  </footer>
+</div>
+
+<div class="mask" id="mask"></div>
+<aside class="drawer" id="drawer">
+  <button class="close" id="drawerClose">✕</button>
+  <h2 id="dName">—</h2>
+  <div style="color:var(--muted);font-size:12px" id="dUid"></div>
+  <div class="stat-grid">
+    <div class="stat"><div class="k">总分</div><div class="v" id="dTotal">0</div></div>
+    <div class="stat"><div class="k">本周</div><div class="v" id="dWeek">0</div></div>
+    <div class="stat"><div class="k">加 / 扣次数</div><div class="v" id="dPM">0/0</div></div>
+  </div>
+  <div style="color:var(--muted);font-size:13px;margin-top:16px">最近记录</div>
+  <div id="dRecords"></div>
+</aside>
+
+<script>
+const $ = s => document.querySelector(s);
+let tab = 'weekly', gid = '', data = null, timer = null;
+
+async function loadGroups(){
+  const r = await fetch('/api/groups').then(r=>r.json()).catch(()=>({groups:[]}));
+  const gs = r.groups || [];
+  $('#groupSel').innerHTML = gs.length
+    ? gs.map(g=>`<option value="${g.gid}">${esc(g.name)}（${g.count}条）</option>`).join('')
+    : '<option value="">暂无群数据</option>';
+  // 优先级：URL ?gid= > 上次浏览的群 > 第一个群
+  const urlGid = new URLSearchParams(location.search).get('gid');
+  const savedGid = localStorage.getItem('zhiren_gid');
+  gid = [urlGid, savedGid].find(v => v && gs.some(g=>g.gid===v)) || gs[0]?.gid || '';
+  if(gid) $('#groupSel').value = gid;
+}
+
+async function load(){
+  const q = gid ? '?gid='+encodeURIComponent(gid) : '';
+  data = await fetch('/api/data'+q).then(r=>r.json()).catch(()=>null);
+  if(!data) return;
+  gid = data.gid || gid;
+  if($('#groupSel').value !== gid) $('#groupSel').value = gid;
+  const opt = $('#groupSel').selectedOptions[0];
+  $('#curGroup').textContent = opt
+    ? ('📌 当前群：' + opt.textContent.replace(/（\d+条）$/, '') + ' · 本群榜单独立统计，切换群请用左上角下拉框')
+    : '';
+  localStorage.setItem('zhiren_gid', gid);
+  history.replaceState(null, '', gid ? '/?gid='+encodeURIComponent(gid) : '/');
+  $('#weekChip').textContent = tab==='weekly' ? (' week: '+data.week_label) : '';
+  render();
+  $('#updatedAt').textContent = '更新于 '+data.updated_at;
+}
+
+function fmtRows(){
+  const rows = tab==='weekly' ? data.weekly : data.total;
+  return rows.map(r=>({
+    uid:String(r.uid),
+    name:r.name || ('QQ'+r.uid),
+    v: tab==='weekly' ? (r.delta||0) : (r.total||0),
+    plus: tab==='weekly' ? (r.plus||0) : (r.plus||0),
+    minus: tab==='weekly' ? (r.minus||0) : (r.minus||0),
+  }));
+}
+
+function render(){
+  const kw = $('#search').value.trim().toLowerCase();
+  const rows = fmtRows().filter(r=>!kw || r.name.toLowerCase().includes(kw) || r.uid.includes(kw));
+  const pod = $('#podium'), list = $('#list');
+  pod.innerHTML=''; list.innerHTML='';
+  $('#empty').style.display = rows.length ? 'none' : 'block';
+  const medals=['🥇','🥈','🥉'], order=['second','first','third'], idx=[1,0,2];
+  rows.slice(0,3).forEach((r,i)=>{
+    const pos = idx[i];
+    const div = document.createElement('div');
+    div.className = 'p-card ' + (pos===1?'first':'');
+    div.style.order = pos;
+    div.innerHTML = `<div class="medal">${medals[i]}</div>
+      <div class="avatar">${r.name.slice(0,1)}</div>
+      <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
+      <div class="score ${r.v>0?'up':r.v<0?'down':''}" style="color:${r.v>0?'var(--plus)':r.v<0?'var(--minus)':'var(--text)'}">${r.v>0?'+':''}${r.v}</div>
+      <div class="delta">+${r.plus} / -${r.minus}</div>`;
+    div.onclick = ()=>openDrawer(r.uid);
+    pod.appendChild(div);
+  });
+  pod.style.display = rows.length? 'grid':'none';
+  rows.slice(3).forEach((r,i)=>{
+    const d = document.createElement('div');
+    d.className='row';
+    d.innerHTML = `<div class="rank">${i+4}</div>
+      <div class="avatar-s">${esc(r.name.slice(0,1))}</div>
+      <div class="col-name"><div class="nm">${esc(r.name)}</div>
+        <div class="sub-info">+${r.plus} / -${r.minus}</div></div>
+      <div class="pts"><div class="v ${r.v>0?'up':r.v<0?'down':''}">${r.v>0?'+':''}${r.v}</div>
+        <div class="d">分</div></div>`;
+    d.onclick = ()=>openDrawer(r.uid);
+    list.appendChild(d);
+  });
+}
+
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+
+async function openDrawer(uid){
+  const d = await fetch(`/api/member?gid=${encodeURIComponent(gid)}&uid=${encodeURIComponent(uid)}`).then(r=>r.json()).catch(()=>null);
+  if(!d || !d.name) return;
+  $('#dName').textContent = d.name;
+  $('#dUid').textContent = 'QQ ' + d.uid;
+  $('#dTotal').textContent = d.total;
+  $('#dWeek').textContent = (d.week_delta>0?'+':'') + d.week_delta;
+  $('#dWeek').style.color = d.week_delta>0?'var(--plus)':d.week_delta<0?'var(--minus)':'var(--text)';
+  $('#dPM').textContent = `${d.plus}/${d.minus}`;
+  const rc = $('#dRecords'); rc.innerHTML='';
+  (d.records||[]).forEach(r=>{
+    const div=document.createElement('div'); div.className='rec';
+    div.innerHTML = `<div class="l1"><b class="${r.delta>0?'up-c':'down-c'}">${r.delta>0?'+':''}${r.delta}</b>
+      ${esc(r.reason||'')}</div>
+      <div class="l2">${esc(r.created_at||'')} · by ${esc(r.operator_name||'?')}</div>`;
+    rc.appendChild(div);
+  });
+  if(!(d.records||[]).length) rc.innerHTML='<div class="empty" style="padding:20px">暂无记录</div>';
+  $('#drawer').classList.add('open'); $('#mask').classList.add('open');
+}
+function closeDrawer(){ $('#drawer').classList.remove('open'); $('#mask').classList.remove('open'); }
+
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); tab=b.dataset.tab; render();
+});
+$('#groupSel').onchange = e=>{ gid=e.target.value; load(); };
+$('#search').oninput = render;
+$('#drawerClose').onclick = closeDrawer;
+$('#mask').onclick = closeDrawer;
+
+(async function init(){
+  await loadGroups(); await load();
+  timer = setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>
