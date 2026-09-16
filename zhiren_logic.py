@@ -48,7 +48,7 @@ def parse_query_command(text: str) -> tuple | None:
         return None
     if re.search(r"帮助|指令|命令|怎么用|help", t, re.I):
         return ("help", None)
-    m = re.search(r"AI评分\s*(状态|开启|打开|开|关闭|关掉|关)?", t, re.I)
+    m = re.search(r"AI裁判\s*(状态|开启|打开|开|关闭|关掉|关)?", t, re.I)
     if m:
         w = m.group(1)
         if not w or w == "状态":

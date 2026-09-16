@@ -81,7 +81,7 @@ def _now() -> str:
     "astrbot_plugin_zhiren_leaderboard",
     "yunyancuo",
     "智人排行榜 — @成员加/扣一分记分、成员信息库、周榜自动播报、@bot 查询、内置 Web 排行榜界面",
-    "1.1.0",
+    "1.1.1",
 )
 class ZhirenLeaderboardPlugin(Star):
     def __init__(self, context: Context):
@@ -508,7 +508,7 @@ class ZhirenLeaderboardPlugin(Star):
         if kind == "ai_judge":
             event.stop_event()
             if gid not in self._ai_enabled:
-                yield event.plain_result("🤖 AI 裁判未开启（管理员发送：AI评分 开）")
+                yield event.plain_result("🤖 AI 裁判未开启（管理员发送：AI裁判 开）")
                 return
             if target_at is not None:
                 uid = str(target_at.qq)
@@ -720,8 +720,8 @@ class ZhirenLeaderboardPlugin(Star):
             "· 查询 @某人（或 查询 名字）—— 个人详情\n"
             "· 我的得分 —— 查自己\n\n"
             "AI 裁判（管理员可开关）：\n"
-            "· AI评分 开 / 关 —— 开关自动判罚\n"
-            "· AI评分 状态 —— 查看状态\n"
+            "· AI裁判 开 / 关 —— 开关自动判罚\n"
+            "· AI裁判 状态 —— 查看状态\n"
             "· 评价 @某人 —— 对其近期发言专项裁决\n"
             "· 评价 —— 立即开庭审议当前上下文\n"
             "开启后每 4 分钟自动开庭，依据德行/脏话/下头/智商/逆天标准，"
