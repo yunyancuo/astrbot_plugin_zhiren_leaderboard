@@ -54,6 +54,10 @@ def parse_query_command(text: str) -> tuple | None:
         if not w or w == "状态":
             return ("ai_status", None)
         return ("ai_toggle", "关" not in w)
+    if re.search(r"确认重置", t):
+        return ("reset_confirm", None)
+    if re.search(r"重置(?:分数|积分|排行|排行榜|数据)?", t):
+        return ("reset", None)
     m = re.search(r"(?:评价|裁决|审判)\s*(.*)", t)
     if m:
         return ("ai_judge", m.group(1).strip())

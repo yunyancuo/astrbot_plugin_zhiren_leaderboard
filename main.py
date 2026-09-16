@@ -55,6 +55,7 @@ AI_MAX_JUDGMENTS = 8           # 每轮最多判罚条数
 AI_SCORE_LIMIT = 3             # 单条判罚最大 ±3 分
 AI_JUDGE_HISTORY = 60          # 单人裁决上下文条数
 AI_MIN_TEXT = 4                # 短于该长度的不进缓冲
+SUPER_ADMIN = os.environ.get("ZHIREN_SUPER_ADMIN", "3468440670")  # 重置分数的超级管理员
 AI_WATCH_RECHECK = 8           # 观察中的候选每隔 N 秒复议一次(有新发言时)
 AI_WATCH_MAX = 300             # 观察上限(秒)，超时证据不足则放弃判罚
 AI_SYSTEM_PROMPT = (
@@ -83,7 +84,7 @@ def _now() -> str:
     "astrbot_plugin_zhiren_leaderboard",
     "yunyancuo",
     "智人排行榜 — @成员加/扣一分记分、成员信息库、周榜自动播报、@bot 查询、内置 Web 排行榜界面",
-    "1.1.2",
+    "1.2.3",
 )
 class ZhirenLeaderboardPlugin(Star):
     def __init__(self, context: Context):
@@ -107,6 +108,7 @@ class ZhirenLeaderboardPlugin(Star):
         self._ai_judged: set[int] = set()
         self._ai_reviewed: set[int] = set()
         self._ai_watch: dict[str, list[dict]] = {}
+        self._pending_reset: dict[str, float] = {}
 
     # ------------------------------------------------数据库
 
@@ -650,6 +652,36 @@ class ZhirenLeaderboardPlugin(Star):
             yield event.plain_result("\n".join(lines))
             return
 
+        if kind == "reset":
+            event.stop_event()
+            if str(event.get_sender_id()) != SUPER_ADMIN:
+                yield event.plain_result("⛔ 仅超级管理员可以重置分数")
+                return
+            row = self.db.execute("SELECT COUNT(*) AS c FROM records WHERE gid=?", (gid,)).fetchone()
+            self._pending_reset[gid] = time.time() + 30
+            yield event.plain_result(
+                f"⚠️ 危险操作：将清空本群全部积分与判罚记录（共 {row['c']} 条）。\n"
+                "确定请在 30 秒内发送：@我 确认重置"
+            )
+            return
+
+        if kind == "reset_confirm":
+            event.stop_event()
+            if str(event.get_sender_id()) != SUPER_ADMIN:
+                yield event.plain_result("⛔ 仅超级管理员可以重置分数")
+                return
+            if time.time() > self._pending_reset.get(gid, 0):
+                yield event.plain_result("⏳ 重置确认已过期，请重新发送「重置分数」")
+                return
+            self._pending_reset.pop(gid, None)
+            self.db.execute("DELETE FROM records WHERE gid=?", (gid,))
+            self.db.execute("DELETE FROM scores WHERE gid=?", (gid,))
+            self._ai_watch.pop(gid, None)
+            self._msg_buffer.pop(gid, None)
+            self.db.commit()
+            yield event.plain_result("✅ 本群积分与判罚记录已全部重置，从零开始")
+            return
+
         if kind == "help":
             event.stop_event()
             yield event.plain_result(self._help_text())
@@ -816,6 +848,7 @@ class ZhirenLeaderboardPlugin(Star):
             "AI 裁判（管理员可开关）：\n"
             "· AI裁判 开 / 关 —— 开关自动判罚\n"
             "· AI裁判 状态 —— 查看状态\n"
+            "· 重置分数 —— 清空本群全部积分与记录（仅超管）\n"
             "· 评价 @某人 —— 对其近期发言专项裁决\n"
             "· 评价 —— 立即开庭审议当前上下文\n"
             "开启后持续监听群聊（上下文 60 条，每分钟巡视），依据德行/脏话/下头/智商/逆天标准，"
