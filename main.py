@@ -21,7 +21,7 @@ from aiohttp import web
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import At, Plain
+from astrbot.api.message_components import At, Plain, Reply
 from astrbot.api.star import Context, Star, register
 
 from .zhiren_logic import (
@@ -51,12 +51,12 @@ _DEDUPE_WINDOW = 10  # 秒：相同操作去重窗口
 AI_TICK_INTERVAL = 2           # 监听循环节拍(秒)，发现新发言立即送审
 AI_CONTEXT_N = 25              # 判决携带的上下文条数(短 prompt = 快响应)
 AI_BUFFER_MAX = 60             # 单群上下文缓冲上限(条)
-AI_MAX_JUDGMENTS = 5           # 每轮最多判罚条数
+AI_MAX_JUDGMENTS = 8           # 每轮最多判罚条数
 AI_SCORE_LIMIT = 3             # 单条判罚最大 ±3 分
 AI_JUDGE_HISTORY = 60          # 单人裁决上下文条数
 AI_MIN_TEXT = 4                # 短于该长度的不进缓冲
 AI_WATCH_RECHECK = 8           # 观察中的候选每隔 N 秒复议一次(有新发言时)
-AI_WATCH_MAX = 600             # 观察上限(秒)，超时证据不足则放弃判罚
+AI_WATCH_MAX = 300             # 观察上限(秒)，超时证据不足则放弃判罚
 AI_SYSTEM_PROMPT = (
     "你是群聊积分系统『智人排行榜』的 AI 裁判，宗旨：公平、公正、公开，只依据发言文本判罚。"
     "你会看到带上下文的群聊记录。判罚必须综合两点证据："
@@ -248,7 +248,8 @@ class ZhirenLeaderboardPlugin(Star):
                     self._seq += 1
                     buf.append({"seq": self._seq, "uid": sender_uid,
                                 "name": event.get_sender_name(), "text": t_clean,
-                                "ts": time.time()})
+                                "ts": time.time(),
+                                "mid": str(getattr(event.message_obj, "message_id", "") or "")})
                     if len(buf) > AI_BUFFER_MAX:
                         for m in buf[: len(buf) - AI_BUFFER_MAX]:
                             self._ai_judged.discard(m["seq"])
@@ -388,10 +389,10 @@ class ZhirenLeaderboardPlugin(Star):
             "标（已判）的发言已判罚过，绝对不要重复输出；"
             "标（已阅）的发言此前审过，除非群友反应明显升级也不要再输出。\n"
             "请依据判罚标准审查新发言，分两类输出：\n"
-            '1. 证据确凿、可直接判罚的（如连续脏话刷屏、大段辱骂）：'
+            '1. 证据确凿、直接判罚、无需观察的：连续脏话刷屏、大段辱骂、跟风辱骂（别人骂自己也跟着骂，如「傻逼XXX」）、露骨性暗示与性骚发言（黄腔、渴性言论，如「好想操女人」）——输出：'
             '{"id": 序号, "delta": 判罚分数, "reason": "评语", "watch": false}\n'
-            '2. 疑似违规但需要群友反应佐证的（如疑似放鸽子、疑似引发嘲笑、疑似性暗示）：'
-            '{"id": 序号, "delta": 0, "reason": "疑似点(15字内)", "watch": true}，该发言将进入观察期\n'
+            '2. 文本本身看不出的品行类疑似（如疑似放鸽子、甩锅、骗人，需要群友反应佐证）：'
+            '{"id": 序号, "delta": 0, "reason": "疑似点(15字内)", "watch": true}，进入观察期\n'
             f"正常发言忽略。最多输出 {AI_MAX_JUDGMENTS} 条。只输出 JSON 数组，不要任何其他文字。\n\n"
             + self._transcript(context, self._ai_judged, self._ai_reviewed)
         )
@@ -466,23 +467,35 @@ class ZhirenLeaderboardPlugin(Star):
         reason = str(obj.get("reason", "")).strip()[:60]
         if delta == 0 or not reason:
             return []
-        anchor = dict(uid=uid, name=name, seq=-1, text="")
+        target_last_mid = ""
+        for mm in reversed(buf):
+            if mm["uid"] == uid:
+                target_last_mid = mm.get("mid", "")
+                break
+        anchor = dict(uid=uid, name=name, seq=-1, text="", mid=target_last_mid)
         return [(anchor, delta, reason)]
 
     async def _announce(self, gid: str, verdicts: list[tuple[dict, int, str]], prefix: str):
-        applied = []
-        for m, d, r in verdicts:
-            total = self._apply_delta(gid, "ai", "AI裁判", m["uid"], m["name"], d, r)
-            applied.append(f"· {m['name']} {'+' if d > 0 else ''}{d} 分（现 {total} 分）｜ {r}")
-            logger.info(f"[智人排行榜][AI] 群{gid} {m['name']}({m['uid']}) {d:+d}分 评语:{r}")
+        """逐条判决公示：用 QQ 原生引用指向被扣分的那句话。"""
         row = self.db.execute("SELECT umo FROM sessions WHERE gid=?", (gid,)).fetchone()
         if not row:
             return
-        text = prefix + "\n" + "\n".join(applied)
-        try:
-            await self.context.send_message(row["umo"], MessageChain(chain=[Plain(text)]))
-        except Exception as e:
-            logger.warning(f"[智人排行榜] AI 判决公示失败(群{gid}): {e!r}")
+        umo = row["umo"]
+        for m, d, r in verdicts:
+            total = self._apply_delta(gid, "ai", "AI裁判", m["uid"], m["name"], d, r)
+            sign = "+" if d > 0 else ""
+            logger.info(f"[智人排行榜][AI] 群{gid} {m['name']}({m['uid']}) {d:+d}分 评语:{r}")
+            chain = []
+            if m.get("mid"):
+                chain.append(Reply(id=m["mid"]))
+            chain.append(At(qq=int(m["uid"]) if m["uid"].isdigit() else m["uid"]))
+            chain.append(Plain(
+                f" {prefix}：{sign}{d} 分（现 {total} 分）\n评语：{r}"
+            ))
+            try:
+                await self.context.send_message(umo, MessageChain(chain=chain))
+            except Exception as e:
+                logger.warning(f"[智人排行榜] AI 判决公示失败(群{gid}): {e!r}")
 
     async def _ai_flush_loop(self):
         """判断流程：持续监听 → 分诊（确凿立即判 / 疑似观察）→ 等群友反应 → LLM 认为可判即输出。"""
