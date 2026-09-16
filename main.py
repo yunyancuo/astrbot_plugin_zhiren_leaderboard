@@ -48,12 +48,15 @@ MEDALS = ["🥇", "🥈", "🥉"]
 _DEDUPE_WINDOW = 10  # 秒：相同操作去重窗口
 
 # ---------------- AI 裁判配置 ----------------
-AI_FLUSH_INTERVAL = 60         # 持续监听的巡视频率(秒)，发现新证据即判罚
+AI_TICK_INTERVAL = 2           # 监听循环节拍(秒)，发现新发言立即送审
+AI_CONTEXT_N = 25              # 判决携带的上下文条数(短 prompt = 快响应)
 AI_BUFFER_MAX = 60             # 单群上下文缓冲上限(条)
 AI_MAX_JUDGMENTS = 5           # 每轮最多判罚条数
 AI_SCORE_LIMIT = 3             # 单条判罚最大 ±3 分
 AI_JUDGE_HISTORY = 60          # 单人裁决上下文条数
 AI_MIN_TEXT = 4                # 短于该长度的不进缓冲
+AI_WATCH_RECHECK = 8           # 观察中的候选每隔 N 秒复议一次(有新发言时)
+AI_WATCH_MAX = 600             # 观察上限(秒)，超时证据不足则放弃判罚
 AI_SYSTEM_PROMPT = (
     "你是群聊积分系统『智人排行榜』的 AI 裁判，宗旨：公平、公正、公开，只依据发言文本判罚。"
     "你会看到带上下文的群聊记录。判罚必须综合两点证据："
@@ -102,6 +105,8 @@ class ZhirenLeaderboardPlugin(Star):
         self._ai_warned: set[str] = set()
         self._seq: int = 0
         self._ai_judged: set[int] = set()
+        self._ai_reviewed: set[int] = set()
+        self._ai_watch: dict[str, list[dict]] = {}
 
     # ------------------------------------------------数据库
 
@@ -242,10 +247,12 @@ class ZhirenLeaderboardPlugin(Star):
                 if not buf or buf[-1]["uid"] != sender_uid or buf[-1]["text"] != t_clean:
                     self._seq += 1
                     buf.append({"seq": self._seq, "uid": sender_uid,
-                                "name": event.get_sender_name(), "text": t_clean})
+                                "name": event.get_sender_name(), "text": t_clean,
+                                "ts": time.time()})
                     if len(buf) > AI_BUFFER_MAX:
                         for m in buf[: len(buf) - AI_BUFFER_MAX]:
                             self._ai_judged.discard(m["seq"])
+                            self._ai_reviewed.discard(m["seq"])
                         del buf[: len(buf) - AI_BUFFER_MAX]
 
         if bot_at:
@@ -351,76 +358,100 @@ class ZhirenLeaderboardPlugin(Star):
 
     @staticmethod
     def _transcript(batch: list[dict], judged: set[int] | None = None,
+                    reviewed: set[int] | None = None,
                     target_uid: str | None = None) -> str:
-        """把缓冲区渲染成编号发言记录；已判罚的行标（已判），目标成员标【目标】。"""
+        """渲染编号发言记录；已判的行标（已判），审过的标（已阅），目标成员标【目标】。"""
         judged = judged or set()
+        reviewed = reviewed or set()
         lines = []
         for i, m in enumerate(batch):
-            mark = "（已判）" if m.get("seq") in judged else ""
+            marks = ""
+            if m.get("seq") in judged:
+                marks += "（已判）"
+            elif m.get("seq") in reviewed:
+                marks += "（已阅）"
             tgt = "【目标】" if target_uid and m["uid"] == target_uid else ""
-            lines.append(f"{i + 1}. {tgt}[{m['uid']}] {m['name']}：{m['text']}{mark}")
+            lines.append(f"{i + 1}. {tgt}[{m['uid']}] {m['name']}：{m['text']}{marks}")
         return "\n".join(lines)
 
-    async def _ai_score_messages(self, gid: str, batch: list[dict]) -> list[tuple[dict, int, str]]:
-        """持续监听：把当前上下文交给 LLM，判罚其中尚未判过的发言。失败返回 []。"""
+    async def _ai_score_messages(self, gid: str, context: list[dict]):
+        """分诊：证据确凿 → 立即判罚；疑似逆天 → 进入观察等群友反应。
+        返回 (immediate_verdicts, watch_candidates)。"""
         provider = self._provider_for(gid)
         if provider is None:
             if gid not in self._ai_warned:
                 self._ai_warned.add(gid)
                 logger.warning("[智人排行榜] 未配置 LLM Provider，AI 裁判不可用")
-            return []
-        judged_here = {m["seq"] for m in batch if m["seq"] in self._ai_judged}
+            return [], []
         prompt = (
-            "以下是持续监听中的群聊记录（含上下文，格式：序号. [QQ号] 名字：内容）。"
-            "标（已判）的发言此前已判罚过，不要重复判罚。"
-            "请依据判罚标准，结合当事人连续发言与其他群友的反应，"
-            f"挑出最多 {AI_MAX_JUDGMENTS} 条需要判罚的发言，"
-            f"每条给 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数分；没有需要判罚的就输出 []。"
-            '输出 JSON 数组：[{"id": 序号, "delta": 分数, "reason": "评语"}]，不要任何其他文字。\n\n'
-            + self._transcript(batch, judged_here)
+            "以下是持续监听中的群聊最近记录（含上下文，格式：序号. [QQ号] 名字：内容）。\n"
+            "标（已判）的发言已判罚过，绝对不要重复输出；"
+            "标（已阅）的发言此前审过，除非群友反应明显升级也不要再输出。\n"
+            "请依据判罚标准审查新发言，分两类输出：\n"
+            '1. 证据确凿、可直接判罚的（如连续脏话刷屏、大段辱骂）：'
+            '{"id": 序号, "delta": 判罚分数, "reason": "评语", "watch": false}\n'
+            '2. 疑似违规但需要群友反应佐证的（如疑似放鸽子、疑似引发嘲笑、疑似性暗示）：'
+            '{"id": 序号, "delta": 0, "reason": "疑似点(15字内)", "watch": true}，该发言将进入观察期\n'
+            f"正常发言忽略。最多输出 {AI_MAX_JUDGMENTS} 条。只输出 JSON 数组，不要任何其他文字。\n\n"
+            + self._transcript(context, self._ai_judged, self._ai_reviewed)
         )
         try:
             resp = await provider.text_chat(prompt=prompt, system_prompt=AI_SYSTEM_PROMPT)
         except Exception as e:
             logger.warning(f"[智人排行榜] AI 裁判调用失败: {e!r}")
-            return []
+            return [], []
         raw = getattr(resp, "completion_text", "") or ""
         verdicts = []
+        watch_new = []
         seen: set[str] = set()
+        watched_uids = {w["uid"] for w in self._ai_watch.get(gid, [])}
         for item in extract_json_array(raw):
-            if not isinstance(item, dict) or len(verdicts) >= AI_MAX_JUDGMENTS:
+            if not isinstance(item, dict) or len(verdicts) + len(watch_new) >= AI_MAX_JUDGMENTS:
                 break
             try:
                 idx = int(item.get("id")) - 1
             except Exception:
                 continue
-            if not (0 <= idx < len(batch)):
+            if not (0 <= idx < len(context)):
                 continue
-            m = batch[idx]
+            m = context[idx]
             if m["seq"] in self._ai_judged or m["uid"] in seen:
                 continue
-            delta = clamp_score(item.get("delta"), AI_SCORE_LIMIT)
             reason = str(item.get("reason", "")).strip()[:60]
+            if item.get("watch"):
+                if m["uid"] in watched_uids or not reason:
+                    continue
+                seen.add(m["uid"])
+                watch_new.append({"uid": m["uid"], "name": m["name"], "hint": reason,
+                                  "since_ts": time.time(), "last_check_ts": 0.0})
+                logger.info(f"[智人排行榜][AI] 群{gid} 进入观察: {m['name']}({m['uid']}) 疑点:{reason}")
+                continue
+            delta = clamp_score(item.get("delta"), AI_SCORE_LIMIT)
             if delta == 0 or not reason:
                 continue
             seen.add(m["uid"])
             verdicts.append((m, delta, reason))
             self._ai_judged.add(m["seq"])
-        return verdicts
+        for m in context:
+            self._ai_reviewed.add(m["seq"])
+        return verdicts, watch_new
 
-    async def _ai_judge_member(self, gid: str, uid: str, name: str) -> list[tuple[dict, int, str]]:
-        """对单个成员的近期言行（含完整上下文与群友反应）做专项裁决。"""
+    async def _ai_judge_member(self, gid: str, uid: str, name: str,
+                               hint: str | None = None) -> list[tuple[dict, int, str]]:
+        """对单个成员的近期言行（含完整上下文与群友反应）做裁决。返回空 = 证据仍不足。"""
         buf = self._msg_buffer.get(gid, [])
         if len(buf) < 2:
             return []
         provider = self._provider_for(gid)
         if provider is None:
             return []
+        hint_line = f"此前初审判定疑似：{hint}。请重点验证群友反应是否支持该判定。\n" if hint else ""
         prompt = (
             f"以下是群聊上下文记录。请专注评估成员「{name}」(QQ:{uid}) 的近期言行"
-            "（其发言已用【目标】标出），结合上下文与其他群友对其发言的反应，给出一个总判罚："
-            f"delta 为 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数（0=证据不足不予判罚），"
+            "（其发言已用【目标】标出），结合上下文与其他群友对其发言的反应（嘲笑、声讨、附和），给出最终裁决："
+            f"delta 为 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数（0=证据仍不足，继续观察），"
             'reason 为不超过 15 字的评语。只输出 JSON：{"delta": 分数, "reason": "评语"}。\n\n'
+            + hint_line
             + self._transcript(buf, target_uid=uid)
         )
         try:
@@ -438,41 +469,74 @@ class ZhirenLeaderboardPlugin(Star):
         anchor = dict(uid=uid, name=name, seq=-1, text="")
         return [(anchor, delta, reason)]
 
+    async def _announce(self, gid: str, verdicts: list[tuple[dict, int, str]], prefix: str):
+        applied = []
+        for m, d, r in verdicts:
+            total = self._apply_delta(gid, "ai", "AI裁判", m["uid"], m["name"], d, r)
+            applied.append(f"· {m['name']} {'+' if d > 0 else ''}{d} 分（现 {total} 分）｜ {r}")
+            logger.info(f"[智人排行榜][AI] 群{gid} {m['name']}({m['uid']}) {d:+d}分 评语:{r}")
+        row = self.db.execute("SELECT umo FROM sessions WHERE gid=?", (gid,)).fetchone()
+        if not row:
+            return
+        text = prefix + "\n" + "\n".join(applied)
+        try:
+            await self.context.send_message(row["umo"], MessageChain(chain=[Plain(text)]))
+        except Exception as e:
+            logger.warning(f"[智人排行榜] AI 判决公示失败(群{gid}): {e!r}")
+
     async def _ai_flush_loop(self):
-        """持续监听：周期性巡视各群上下文，发现新证据立即判罚并公示。"""
+        """判断流程：持续监听 → 分诊（确凿立即判 / 疑似观察）→ 等群友反应 → LLM 认为可判即输出。"""
         while True:
             try:
-                await asyncio.sleep(AI_FLUSH_INTERVAL)
+                await asyncio.sleep(AI_TICK_INTERVAL)
+                now = time.time()
                 for gid in list(self._msg_buffer.keys()):
                     if gid not in self._ai_enabled:
                         self._msg_buffer.pop(gid, None)
+                        self._ai_watch.pop(gid, None)
                         continue
                     buf = self._msg_buffer.get(gid) or []
-                    if not any(m["seq"] not in self._ai_judged for m in buf):
-                        continue  # 没有新证据，继续监听
-                    verdicts = await self._ai_score_messages(gid, buf)
-                    if not verdicts:
+                    watches = self._ai_watch.setdefault(gid, [])
+
+                    # ① 观察中的候选：有新发言(群友反应)时复议，LLM 觉得能判就立即输出
+                    for w in list(watches):
+                        new_msgs = [m for m in buf if m["ts"] > w["last_check_ts"]]
+                        if not new_msgs:
+                            continue
+                        if now - w["last_check_ts"] < AI_WATCH_RECHECK:
+                            continue
+                        w["last_check_ts"] = now
+                        if now - w["since_ts"] > AI_WATCH_MAX:
+                            watches.remove(w)
+                            logger.info(f"[智人排行榜][AI] 群{gid} 对 {w['name']} 观察超时，证据不足放弃判罚")
+                            continue
+                        verdicts = await self._ai_judge_member(gid, w["uid"], w["name"], hint=w["hint"])
+                        if verdicts:
+                            watches.remove(w)
+                            await self._announce(gid, verdicts, "🤖 AI 裁判判决（结合群友反应）")
+                        # 返回空 = LLM 认为还需继续观察
+
+                    # ② 分诊新发言：确凿立即判，疑似进入观察
+                    has_new = any(
+                        m["seq"] not in self._ai_judged and m["seq"] not in self._ai_reviewed
+                        for m in buf
+                    )
+                    if not has_new:
                         continue
-                    applied = []
-                    for m, d, r in verdicts:
-                        total = self._apply_delta(gid, "ai", "AI裁判", m["uid"], m["name"], d, r)
-                        applied.append(f"· {m['name']} {'+' if d > 0 else ''}{d} 分（现 {total} 分）｜ {r}")
-                        logger.info(f"[智人排行榜][AI] 群{gid} {m['name']}({m['uid']}) {d:+d}分 评语:{r}")
-                    row = self.db.execute("SELECT umo FROM sessions WHERE gid=?", (gid,)).fetchone()
-                    if not row:
-                        continue
-                    text = "🤖 AI 裁判公示（公平 · 公正 · 公开）\n" + "\n".join(applied)
-                    try:
-                        await self.context.send_message(
-                            row["umo"], MessageChain(chain=[Plain(text)])
-                        )
-                    except Exception as e:
-                        logger.warning(f"[智人排行榜] AI 判决公示失败(群{gid}): {e!r}")
+                    context = buf[-AI_CONTEXT_N:]
+                    verdicts, watch_new = await self._ai_score_messages(gid, context)
+                    watched_uids = {w["uid"] for w in watches}
+                    for w in watch_new:
+                        if w["uid"] not in watched_uids:
+                            watches.append(w)
+                    if verdicts:
+                        await self._announce(gid, verdicts, "🤖 AI 裁判判决（证据确凿）")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(f"[智人排行榜] AI 判决循环异常: {e!r}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(5)
+
 
     # ------------------------------------------------查询
 
@@ -517,7 +581,7 @@ class ZhirenLeaderboardPlugin(Star):
             n = len(self._msg_buffer.get(gid, []))
             yield event.plain_result(
                 f"🤖 AI 裁判：{'✅ 开启' if gid in self._ai_enabled else '❌ 关闭'}"
-                f"（持续监听中，上下文 {n}/{AI_BUFFER_MAX} 条，每 {AI_FLUSH_INTERVAL} 秒巡视一次）"
+                f"（持续监听中，上下文 {n}/{AI_BUFFER_MAX} 条，发现逆天发言秒级判决）"
             )
             return
 
@@ -557,11 +621,12 @@ class ZhirenLeaderboardPlugin(Star):
                 )
                 return
             batch = self._msg_buffer.get(gid) or []
-            unjudged = [m for m in batch if m["seq"] not in self._ai_judged]
+            unjudged = [m for m in batch if m["seq"] not in self._ai_judged
+                             and m["seq"] not in self._ai_reviewed]
             if len(unjudged) < 2:
                 yield event.plain_result("🤖 新发言不足，稍后再开庭")
                 return
-            verdicts = await self._ai_score_messages(gid, batch)
+            verdicts, _watch_new = await self._ai_score_messages(gid, batch)
             if not verdicts:
                 yield event.plain_result("🤖 本庭审议完毕：人人清白，无人被判罚")
                 return
