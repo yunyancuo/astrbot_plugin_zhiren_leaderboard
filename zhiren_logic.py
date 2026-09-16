@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime, timedelta, timezone
 
@@ -47,6 +48,15 @@ def parse_query_command(text: str) -> tuple | None:
         return None
     if re.search(r"帮助|指令|命令|怎么用|help", t, re.I):
         return ("help", None)
+    m = re.search(r"AI评分\s*(状态|开启|打开|开|关闭|关掉|关)?", t, re.I)
+    if m:
+        w = m.group(1)
+        if not w or w == "状态":
+            return ("ai_status", None)
+        return ("ai_toggle", "关" not in w)
+    m = re.search(r"(?:评价|裁决|审判)\s*(.*)", t)
+    if m:
+        return ("ai_judge", m.group(1).strip())
     if re.search(r"本周|这周|周榜|周排行", t):
         return ("weekly", None)
     if re.search(r"总分|总榜|总排行|累计", t) or t in ("排行榜", "排行", "榜"):
@@ -95,3 +105,46 @@ def seconds_until_next_post(now: datetime | None = None,
     if candidate <= now:
         candidate += timedelta(days=7)
     return max(1, int((candidate - now).total_seconds()))
+
+
+# ---------------- AI 裁判输出解析 ----------------
+
+_JSON_ARRAY_RE = re.compile(r"\[[\s\S]*?\]")
+_JSON_OBJ_RE = re.compile(r"\{[\s\S]*?\}")
+
+
+def extract_json_array(text: str) -> list:
+    """从 LLM 回复中提取第一个 JSON 数组（容忍 markdown 代码块、前后缀文本）。"""
+    if not text:
+        return []
+    m = _JSON_ARRAY_RE.search(text)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def extract_json_object(text: str) -> dict:
+    """从 LLM 回复中提取第一个 JSON 对象。失败返回 {}。"""
+    if not text:
+        return {}
+    m = _JSON_OBJ_RE.search(text)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def clamp_score(v, limit: int = 3) -> int:
+    """AI 给的分数钳制到 [-limit, +limit] 的整数。"""
+    try:
+        v = int(round(float(v)))
+    except Exception:
+        return 0
+    return max(-limit, min(limit, v))

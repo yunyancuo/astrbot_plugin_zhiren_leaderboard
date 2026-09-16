@@ -26,6 +26,9 @@ from astrbot.api.star import Context, Star, register
 
 from .zhiren_logic import (
     TZ_SH,
+    clamp_score,
+    extract_json_array,
+    extract_json_object,
     parse_query_command,
     parse_score_command,
     prev_week_key,
@@ -44,6 +47,31 @@ WEB_PORT = int(os.environ.get("ZHIREN_WEB_PORT", "6201"))
 MEDALS = ["🥇", "🥈", "🥉"]
 _DEDUPE_WINDOW = 10  # 秒：相同操作去重窗口
 
+# ---------------- AI 裁判配置 ----------------
+AI_FLUSH_INTERVAL = 240        # 判决周期(秒)
+AI_BUFFER_MAX = 60             # 单群消息缓冲上限(上下文长度)
+AI_MIN_BATCH = 3               # 一轮至少多少条新发言才调用 LLM
+AI_MAX_JUDGMENTS = 5           # 每轮最多判罚条数
+AI_SCORE_LIMIT = 3             # 单条判罚最大 ±3 分
+AI_JUDGE_HISTORY = 30          # 单人裁决取最近 N 条发言
+AI_MIN_TEXT = 4                # 短于该长度的不进缓冲
+AI_SYSTEM_PROMPT = (
+    "你是群聊积分系统『智人排行榜』的 AI 裁判，宗旨：公平、公正、公开，只依据发言文本判罚。"
+    "你会看到带上下文的群聊记录。判罚必须综合两点证据："
+    "①当事人自己的发言（同一人连续多条要整体看待，如连续刷脏话）；"
+    "②其他群友的反应——被嘲笑、被集体声讨、被附和起哄都是重要判罚依据。\n"
+    "扣分标准：\n"
+    "1.【德行不足】-1~-3：发言暴露人品问题，如放别人鸽子、爽约、甩锅、占便宜、"
+    "背后嚼舌根、骗人等引起公愤的不良行为；情节越严重、群友越愤怒扣得越多，引发集体声讨可直接 -3。\n"
+    "2.【满嘴脏话】-2~-3（高门槛）：偶尔带脏字不算；同一人连续多条刷脏话、或大段辱骂、"
+    "攻击性极强才扣分，刷得越凶扣得越重。\n"
+    "3.【下头性暗示】-1~-3：令人不适的黄腔、性暗示、油腻骚扰发言，越下头扣越多。\n"
+    "4.【智商掉线】-1~-2：对极简单常识的迷惑发言，且明显引发群友集体嘲笑的（以群友回帖反应为准）。\n"
+    "5.【其他逆天】-1~-3：其余明显逆天、暴论、迷惑行为，自由裁量。\n"
+    "另有：极少数惊艳的金句/神操作可 +1（难得才给，宁缺毋滥）；普通灌水、日常聊天一律 0 分不记。"
+    "拿不准的一律 0 分。评语不超过 15 字，要犀利、有梗、对事不对人。只输出 JSON。"
+)
+
 
 def _now() -> str:
     return datetime.now(TZ_SH).strftime("%Y-%m-%d %H:%M:%S")
@@ -53,7 +81,7 @@ def _now() -> str:
     "astrbot_plugin_zhiren_leaderboard",
     "yunyancuo",
     "智人排行榜 — @成员加/扣一分记分、成员信息库、周榜自动播报、@bot 查询、内置 Web 排行榜界面",
-    "1.0.2",
+    "1.1.0",
 )
 class ZhirenLeaderboardPlugin(Star):
     def __init__(self, context: Context):
@@ -71,6 +99,8 @@ class ZhirenLeaderboardPlugin(Star):
         self._runner: web.AppRunner | None = None
         self._index_cache: bytes | None = None
         self._index_mtime: float = 0.0
+        self._msg_buffer: dict[str, list[dict]] = {}
+        self._ai_warned: set[str] = set()
 
     # ------------------------------------------------数据库
 
@@ -106,9 +136,15 @@ class ZhirenLeaderboardPlugin(Star):
             CREATE TABLE IF NOT EXISTS sessions(
                 gid TEXT PRIMARY KEY, umo TEXT, updated_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS ai_config(
+                gid TEXT PRIMARY KEY, enabled INTEGER DEFAULT 0, updated_at TEXT
+            );
             """
         )
         self.db.commit()
+        self._ai_enabled: set[str] = {
+            r["gid"] for r in self.db.execute("SELECT gid FROM ai_config WHERE enabled=1")
+        }
 
     def _upsert_member(self, gid: str, uid: str, name: str) -> None:
         name = (name or "").strip() or f"QQ{uid}"
@@ -195,6 +231,18 @@ class ZhirenLeaderboardPlugin(Star):
 
         text = "".join(getattr(c, "text", "") for c in comps if isinstance(c, Plain))
 
+        # AI 裁判：非 @bot 的正常发言进入缓冲区，等待批量判决
+        if not bot_at and gid in self._ai_enabled:
+            t_clean = text.strip()
+            if len(t_clean) >= AI_MIN_TEXT:
+                t_clean = t_clean[:500]
+                sender_uid = str(event.get_sender_id())
+                buf = self._msg_buffer.setdefault(gid, [])
+                if not buf or buf[-1]["uid"] != sender_uid or buf[-1]["text"] != t_clean:
+                    buf.append({"uid": sender_uid, "name": event.get_sender_name(), "text": t_clean})
+                    if len(buf) > AI_BUFFER_MAX:
+                        del buf[: len(buf) - AI_BUFFER_MAX]
+
         if bot_at:
             async for r in self._handle_query(event, gid, text, target_at):
                 yield r
@@ -240,25 +288,11 @@ class ZhirenLeaderboardPlugin(Star):
         self._upsert_member(gid, target_uid, target_name)
 
         delta = parsed["delta"]
-        wk = week_key_of()
-        cur = self.db.execute(
-            "INSERT INTO records(gid,week,operator_uid,operator_name,target_uid,target_name,delta,reason,created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
-            (gid, wk, operator_uid, operator_name, target_uid, target_name,
-             delta, parsed["reason"], _now()),
+        total_v = self._apply_delta(
+            gid, operator_uid, operator_name, target_uid, target_name,
+            delta, parsed["reason"],
         )
-        self.db.execute(
-            "INSERT INTO scores(gid,uid,total,plus,minus) VALUES(?,?,?,?,?) "
-            "ON CONFLICT(gid,uid) DO UPDATE SET "
-            "total=total+excluded.total, plus=plus+excluded.plus, minus=minus+excluded.minus",
-            (gid, target_uid, delta, 1 if delta > 0 else 0, 1 if delta < 0 else 0),
-        )
-        self.db.commit()
 
-        total = self.db.execute(
-            "SELECT total FROM scores WHERE gid=? AND uid=?", (gid, target_uid)
-        ).fetchone()
-        total_v = total["total"] if total else delta
         arrow = "📈" if delta > 0 else "📉"
         word = "加" if delta > 0 else "扣"
         logger.info(
@@ -276,6 +310,155 @@ class ZhirenLeaderboardPlugin(Star):
             ]
         )
 
+    # ------------------------------------------------分数入库（人工/AI 共用）
+
+    def _apply_delta(self, gid: str, operator_uid: str, operator_name: str,
+                     target_uid: str, target_name: str, delta: int, reason: str) -> int:
+        """写入一条判罚记录并更新总分，返回该成员当前总分。"""
+        self._upsert_member(gid, target_uid, target_name)
+        self.db.execute(
+            "INSERT INTO records(gid,week,operator_uid,operator_name,target_uid,target_name,delta,reason,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (gid, week_key_of(), operator_uid, operator_name, target_uid, target_name,
+             delta, reason, _now()),
+        )
+        self.db.execute(
+            "INSERT INTO scores(gid,uid,total,plus,minus) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(gid,uid) DO UPDATE SET "
+            "total=total+excluded.total, plus=plus+excluded.plus, minus=minus+excluded.minus",
+            (gid, target_uid, delta, 1 if delta > 0 else 0, 1 if delta < 0 else 0),
+        )
+        self.db.commit()
+        row = self.db.execute(
+            "SELECT total FROM scores WHERE gid=? AND uid=?", (gid, target_uid)
+        ).fetchone()
+        return row["total"] if row else delta
+
+    # ------------------------------------------------AI 裁判
+
+    def _provider_for(self, gid: str):
+        row = self.db.execute("SELECT umo FROM sessions WHERE gid=?", (gid,)).fetchone()
+        umo = row["umo"] if row else None
+        try:
+            return self.context.get_using_provider(umo)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _transcript(batch: list[dict]) -> str:
+        return "\n".join(
+            f"{i + 1}. [{m['uid']}] {m['name']}：{m['text']}"
+            for i, m in enumerate(batch)
+        )
+
+    async def _ai_score_messages(self, gid: str, batch: list[dict]) -> list[tuple[dict, int, str]]:
+        """调用 LLM 对一批发言判罚，返回 [(发言, delta, reason), ...]。失败返回 []。"""
+        provider = self._provider_for(gid)
+        if provider is None:
+            if gid not in self._ai_warned:
+                self._ai_warned.add(gid)
+                logger.warning("[智人排行榜] 未配置 LLM Provider，AI 裁判不可用")
+            return []
+        prompt = (
+            "以下是群聊最近发言记录（含上下文，格式：序号. [QQ号] 名字：内容）。"
+            "请依据判罚标准，结合当事人连续发言与其他群友的反应，"
+            f"挑出最多 {AI_MAX_JUDGMENTS} 条需要判罚的发言，"
+            f"每条给 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数分；普通发言不要输出。"
+            '输出 JSON 数组：[{"id": 序号, "delta": 分数, "reason": "评语"}]，不要任何其他文字。\n\n'
+            + self._transcript(batch)
+        )
+        try:
+            resp = await provider.text_chat(prompt=prompt, system_prompt=AI_SYSTEM_PROMPT)
+        except Exception as e:
+            logger.warning(f"[智人排行榜] AI 裁判调用失败: {e!r}")
+            return []
+        raw = getattr(resp, "completion_text", "") or ""
+        verdicts = []
+        seen: set[int] = set()
+        for item in extract_json_array(raw):
+            if not isinstance(item, dict) or len(verdicts) >= AI_MAX_JUDGMENTS:
+                break
+            try:
+                idx = int(item.get("id")) - 1
+            except Exception:
+                continue
+            if not (0 <= idx < len(batch)) or idx in seen:
+                continue
+            delta = clamp_score(item.get("delta"), AI_SCORE_LIMIT)
+            reason = str(item.get("reason", "")).strip()[:60]
+            if delta == 0 or not reason:
+                continue
+            seen.add(idx)
+            verdicts.append((batch[idx], delta, reason))
+        return verdicts
+
+    async def _ai_judge_member(self, gid: str, uid: str, name: str) -> list[tuple[dict, int, str]]:
+        """对单个成员的近期发言（含上下文与群友反应）做专项裁决。"""
+        msgs = [m for m in self._msg_buffer.get(gid, []) if m["uid"] == uid]
+        batch = msgs[-AI_JUDGE_HISTORY:]
+        if len(batch) < 2:
+            return []
+        provider = self._provider_for(gid)
+        if provider is None:
+            return []
+        prompt = (
+            f"以下是群成员「{name}」(QQ:{uid}) 在群聊上下文中的最近发言（其余为其他群友的发言与反应）。"
+            "请依据判罚标准，结合上下文与其他群友对其发言的反应，给出一个总判罚："
+            f"delta 为 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数（0=证据不足不予判罚），"
+            'reason 为不超过 15 字的评语。只输出 JSON：{"delta": 分数, "reason": "评语"}。\n\n'
+            + self._transcript(batch)
+        )
+        try:
+            resp = await provider.text_chat(prompt=prompt, system_prompt=AI_SYSTEM_PROMPT)
+        except Exception as e:
+            logger.warning(f"[智人排行榜] AI 裁判调用失败: {e!r}")
+            return []
+        obj = extract_json_object(getattr(resp, "completion_text", "") or "")
+        if not obj:
+            return []
+        delta = clamp_score(obj.get("delta"), AI_SCORE_LIMIT)
+        reason = str(obj.get("reason", "")).strip()[:60]
+        if delta == 0 or not reason:
+            return []
+        return [(dict(uid=uid, name=name, text=""), delta, reason)]
+
+    async def _ai_flush_loop(self):
+        """定时把各群缓冲的发言交给 AI 裁判，判决公示到群里。"""
+        while True:
+            try:
+                await asyncio.sleep(AI_FLUSH_INTERVAL)
+                for gid in list(self._msg_buffer.keys()):
+                    if gid not in self._ai_enabled:
+                        self._msg_buffer.pop(gid, None)
+                        continue
+                    batch = self._msg_buffer.get(gid) or []
+                    if len(batch) < AI_MIN_BATCH:
+                        continue
+                    self._msg_buffer[gid] = []
+                    verdicts = await self._ai_score_messages(gid, batch)
+                    if not verdicts:
+                        continue
+                    applied = []
+                    for m, d, r in verdicts:
+                        total = self._apply_delta(gid, "ai", "AI裁判", m["uid"], m["name"], d, r)
+                        applied.append(f"· {m['name']} {'+' if d > 0 else ''}{d} 分（现 {total} 分）｜ {r}")
+                        logger.info(f"[智人排行榜][AI] 群{gid} {m['name']}({m['uid']}) {d:+d}分 评语:{r}")
+                    row = self.db.execute("SELECT umo FROM sessions WHERE gid=?", (gid,)).fetchone()
+                    if not row:
+                        continue
+                    text = "🤖 AI 裁判公示（公平 · 公正 · 公开）\n" + "\n".join(applied)
+                    try:
+                        await self.context.send_message(
+                            row["umo"], MessageChain(chain=[Plain(text)])
+                        )
+                    except Exception as e:
+                        logger.warning(f"[智人排行榜] AI 判决公示失败(群{gid}): {e!r}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"[智人排行榜] AI 判决循环异常: {e!r}")
+                await asyncio.sleep(60)
+
     # ------------------------------------------------查询
 
     async def _handle_query(self, event: AstrMessageEvent, gid: str, text: str,
@@ -291,6 +474,87 @@ class ZhirenLeaderboardPlugin(Star):
         comps = event.get_messages() or []
         if target_at is not None and kind == "detail":
             arg = str(target_at.qq)
+
+        if kind == "ai_toggle":
+            if not event.is_admin():
+                event.stop_event()
+                yield event.plain_result("⛔ 只有管理员才能开关 AI 裁判")
+                return
+            enable = bool(arg)
+            (self._ai_enabled.add if enable else self._ai_enabled.discard)(gid)
+            self.db.execute(
+                "INSERT INTO ai_config(gid,enabled,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(gid) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at",
+                (gid, 1 if enable else 0, _now()),
+            )
+            self.db.commit()
+            event.stop_event()
+            yield event.plain_result(
+                f"🤖 AI 裁判已{'开启' if enable else '关闭'}"
+                + ("。我将依据德行/脏话/下头/智商/逆天标准，结合上下文与群友反应自动判罚，每 4 分钟开庭一次。"
+                   if enable else "")
+            )
+            return
+
+        if kind == "ai_status":
+            event.stop_event()
+            n = len(self._msg_buffer.get(gid, []))
+            yield event.plain_result(
+                f"🤖 AI 裁判：{'✅ 开启' if gid in self._ai_enabled else '❌ 关闭'}"
+                f"（已缓冲 {n}/{AI_BUFFER_MAX} 条，每 {AI_FLUSH_INTERVAL // 60} 分钟开庭）"
+            )
+            return
+
+        if kind == "ai_judge":
+            event.stop_event()
+            if gid not in self._ai_enabled:
+                yield event.plain_result("🤖 AI 裁判未开启（管理员发送：AI评分 开）")
+                return
+            if target_at is not None:
+                uid = str(target_at.qq)
+                name = (getattr(target_at, "name", "") or "").strip() or f"QQ{uid}"
+            elif arg in ("me", "我", "自己", "我的"):
+                uid, name = str(event.get_sender_id()), event.get_sender_name()
+            elif arg and not arg.isdigit():
+                row = self.db.execute(
+                    "SELECT uid,name FROM members WHERE gid=? AND name LIKE ? ORDER BY updated_at DESC LIMIT 1",
+                    (gid, f"%{arg}%"),
+                ).fetchone()
+                if not row:
+                    yield event.plain_result(f"😶 没有找到「{arg}」的发言记录")
+                    return
+                uid, name = row["uid"], row["name"]
+            else:
+                uid, name = "", ""
+            if uid:
+                verdicts = await self._ai_judge_member(gid, uid, name)
+                if not verdicts:
+                    yield event.plain_result(
+                        f"🤖 对 {name} 的专项裁决：证据不足或发言记录太少，本轮不予判罚"
+                    )
+                    return
+                m, d, r = verdicts[0]
+                total = self._apply_delta(gid, "ai", "AI裁判", m["uid"], m["name"], d, r)
+                logger.info(f"[智人排行榜][AI] 群{gid} 专项裁决 {name}({uid}) {d:+d}分 评语:{r}")
+                yield event.plain_result(
+                    f"🤖 AI 裁判对 {name} 的专项裁决：{'+' if d > 0 else ''}{d} 分（现 {total} 分）\n评语：{r}"
+                )
+                return
+            batch = self._msg_buffer.get(gid) or []
+            if len(batch) < AI_MIN_BATCH:
+                yield event.plain_result("🤖 发言缓冲不足，稍后再开庭")
+                return
+            self._msg_buffer[gid] = []
+            verdicts = await self._ai_score_messages(gid, batch)
+            if not verdicts:
+                yield event.plain_result("🤖 本庭审议完毕：人人清白，无人被判罚")
+                return
+            lines = ["🤖 AI 裁判当庭宣判（公平 · 公正 · 公开）"]
+            for m, d, r in verdicts:
+                total = self._apply_delta(gid, "ai", "AI裁判", m["uid"], m["name"], d, r)
+                lines.append(f"· {m['name']} {'+' if d > 0 else ''}{d} 分（现 {total} 分）｜ {r}")
+            yield event.plain_result("\n".join(lines))
+            return
 
         if kind == "help":
             event.stop_event()
@@ -455,6 +719,13 @@ class ZhirenLeaderboardPlugin(Star):
             "· 周榜 / 本周排行 —— 本周排行榜\n"
             "· 查询 @某人（或 查询 名字）—— 个人详情\n"
             "· 我的得分 —— 查自己\n\n"
+            "AI 裁判（管理员可开关）：\n"
+            "· AI评分 开 / 关 —— 开关自动判罚\n"
+            "· AI评分 状态 —— 查看状态\n"
+            "· 评价 @某人 —— 对其近期发言专项裁决\n"
+            "· 评价 —— 立即开庭审议当前上下文\n"
+            "开启后每 4 分钟自动开庭，依据德行/脏话/下头/智商/逆天标准，"
+            "结合上下文与群友反应判罚 ±3 分并公示\n\n"
             f"网页排行榜：http://<服务器IP>:{WEB_PORT}"
         )
 
@@ -542,7 +813,11 @@ class ZhirenLeaderboardPlugin(Star):
         site = web.TCPSite(self._runner, "0.0.0.0", WEB_PORT)
         await site.start()
         self._tasks.append(asyncio.create_task(self._weekly_loop()))
-        logger.info(f"[智人排行榜] 已加载，Web 界面: http://0.0.0.0:{WEB_PORT}")
+        self._tasks.append(asyncio.create_task(self._ai_flush_loop()))
+        logger.info(
+            f"[智人排行榜] 已加载，Web 界面: http://0.0.0.0:{WEB_PORT}，"
+            f"AI 裁判已启用群数: {len(self._ai_enabled)}"
+        )
 
     async def terminate(self):
         for t in self._tasks:

@@ -4,6 +4,6 @@ desc: |
   群聊记分排行系统：群里发「@某成员 加一分 理由」或「@某成员 扣一分 理由」即可记分，
   成员昵称实时入库；@机器人 可查询总分榜 / 周榜 / 个人得分详情；每周一自动向各群播报上周排行榜；
   内置独立 Web 排行榜界面（领奖台 / 搜索 / 个人详情 / 30 秒自动刷新），各群数据完全独立。
-version: 1.0.2
+version: 1.1.0
 author: yunyancuo
 repo: https://github.com/yunyancuo/astrbot_plugin_zhiren_leaderboard
