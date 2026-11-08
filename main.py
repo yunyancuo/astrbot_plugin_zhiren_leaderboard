@@ -117,7 +117,7 @@ def _now() -> str:
     "astrbot_plugin_zhiren_leaderboard",
     "yunyancuo",
     "智人排行榜 — @成员加/扣一分记分、成员信息库、周榜自动播报、@bot 查询、内置 Web 排行榜界面",
-    "1.6.4",
+    "1.7.1",
 )
 class ZhirenLeaderboardPlugin(Star):
     def __init__(self, context: Context):
@@ -367,6 +367,9 @@ class ZhirenLeaderboardPlugin(Star):
         # AI 裁判：非 @bot 的正常发言进入滚动上下文缓冲，持续监听
         if not bot_at and gid in self._ai_enabled:
             t_clean = text.strip()
+            # 记分指令不进裁判缓冲：手动记分过的行为若再被 AI 判罚会双重计分
+            if re.search(r"(加|扣|减)\s*[一两二0-9]+\s*分", t_clean):
+                t_clean = ""
             if len(t_clean) >= AI_MIN_TEXT:
                 t_clean = t_clean[:500]
                 sender_uid = str(event.get_sender_id())
@@ -742,9 +745,9 @@ class ZhirenLeaderboardPlugin(Star):
             "delta 只能是 -1、0 或 +1：违规扣分一律 -1（禁止 -2/-3），命中加分项（金句/助人/干货/幽默/救场）一律 +1；"
             "判罚可判可不判时倾向放过，加分可加可不加时倾向 +1。"
             "已被引用为判罚证据的群友回应（下文）不要再判罚。\n"
-            '2. 文本本身看不出的品行类疑似（如疑似放鸽子、甩锅、骗人，需要群友反应佐证）：'
+            '2. 文本本身看不出来的品行类疑似（如疑似放鸽子、甩锅、骗人，需要群友反应佐证）：'
             '{"id": 序号, "delta": 0, "reason": "疑似点(15字内)", "watch": true}，进入观察期\n'
-            f"正常发言忽略。最多输出 {AI_MAX_JUDGMENTS} 条。只输出 JSON 数组，不要任何其他文字。\n\n"
+            "正常发言忽略。最多输出 {AI_MAX_JUDGMENTS} 条。只输出 JSON 数组，不要任何其他文字。\n\n"
             + self._transcript(context, self._ai_judged, self._ai_reviewed)
         )
         try:
