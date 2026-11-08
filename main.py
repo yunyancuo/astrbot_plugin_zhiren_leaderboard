@@ -745,9 +745,9 @@ class ZhirenLeaderboardPlugin(Star):
             "delta 只能是 -1、0 或 +1：违规扣分一律 -1（禁止 -2/-3），命中加分项（金句/助人/干货/幽默/救场）一律 +1；"
             "判罚可判可不判时倾向放过，加分可加可不加时倾向 +1。"
             "已被引用为判罚证据的群友回应（下文）不要再判罚。\n"
-            '2. 文本本身看不出来的品行类疑似（如疑似放鸽子、甩锅、骗人，需要群友反应佐证）：'
+            '2. 文本本身看不出的品行类疑似（如疑似放鸽子、甩锅、骗人，需要群友反应佐证）：'
             '{"id": 序号, "delta": 0, "reason": "疑似点(15字内)", "watch": true}，进入观察期\n'
-            "正常发言忽略。最多输出 {AI_MAX_JUDGMENTS} 条。只输出 JSON 数组，不要任何其他文字。\n\n"
+            f"正常发言忽略。最多输出 {AI_MAX_JUDGMENTS} 条。只输出 JSON 数组，不要任何其他文字。\n\n"
             + self._transcript(context, self._ai_judged, self._ai_reviewed)
         )
         try:
