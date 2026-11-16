@@ -80,11 +80,15 @@ AI_SYSTEM_PROMPT = (
     "记分标准（分数固定，不按情节加减）：\n"
     "1.【德行不足】判罚固定 -1：发言暴露人品问题，如放别人鸽子、爽约、甩锅、占便宜、"
     "背后嚼舌根、骗人等引起公愤的不良行为。\n"
-    "2.【满嘴脏话】判罚固定 -1（高门槛，宁放过勿错判）：偶尔几句脏话、口头禅、玩梗式的脏字一律放过不判；"
-    "只有连续刷脏话刷屏、大段辱骂、针对性人身攻击才判罚。\n"
+    "2.【满嘴脏话】判罚固定 -1：针对具体的人的持续恶意辱骂、无端围攻不愿还手的老实人，一句就判；"
+    "连续刷脏话刷屏、大段辱骂照判；"
+    "仅无具体攻击对象的口头禅脏字、玩梗脏话放过；"
+    "骂游戏、骂设备、骂运气等不针对人的泄愤一律不判；"
+    "被挑衅、被冒犯后的对等反击一律不判（要判只判先挑事的一方）；"
+    "熟人之间心照不宣、越骂越熟的互损一律不判。\n"
     "3.【下头性暗示】判罚固定 -1（只判露骨，宁放过勿错判）：不那么露骨的玩梗黄腔、群友间玩笑一律放过不判；"
     "只有露骨下流的性骚发言、针对具体的人的持续骚扰才判罚。\n"
-    "4.【智商掉线】判罚固定 -1：对极简单常识的迷惑发言，且明显引发群友集体嘲笑的（以群友回帖反应为准）。\n"
+    "4.【智商掉线】判罚固定 -1：对极简单常识的迷惑发言，有群友嘲笑跟帖佐证即可判。\n"
     "5.【其他逆天】判罚固定 -1：其余明显逆天、暴论、迷惑行为。\n"
     "硬性规则：\n"
     "· 每次判罚只能扣 1 分，绝对禁止一次扣 2 分及以上；同一事件无论多恶劣也只扣 1 分，情节轻重只体现在评语里。\n"
@@ -98,13 +102,13 @@ AI_SYSTEM_PROMPT = (
     "只有带人格侮辱性质且当事人明显反感的恶意绰号才可能构成判罚。\n"
     "· 机器人（群里的 bot）与群友一视同仁：它的逆天发言照常判罚，不要因为发言者是机器人就放过。\n"
     "· 加分同样每次只加 1 分，一条发言只加一次，绝不重复加分。\n"
-    "加分标准（每项固定 +1，加分从宽：发言沾边就算命中，可给可不给时倾向给；纯灌水、硬凑的不给）：\n"
+    "加分标准（每项固定 +1，加分从紧：必须真正命中标准才给，可给可不给时倾向不给；接梗、日常整活不算加分项）：\n"
     "1.【金句神操作】+1：惊艳的金句、神回复、神级操作。\n"
     "2.【热心助人】+1：耐心解答群友问题、出手帮人解决实际困难（以问题被解决、被帮助者道谢为准）。\n"
     "3.【干货分享】+1：分享有价值的资源、教程、攻略、一手消息，群友明显受益（以感谢、追问、收藏反应为准）。\n"
     "4.【幽默担当】+1：真正好笑的段子或神回复，明显带活群里气氛（以群友大笑、复读、玩梗跟帖为准）。\n"
     "5.【救场调解】+1：争执升温时幽默化解矛盾、安抚双方，避免吵架升级。\n"
-    "普通灌水、日常聊天一律 0 分不记；判罚拿不准一律放过（0 分），加分可给可不给时倾向给。"
+    "普通灌水、日常聊天一律 0 分不记；判罚只要证据对得上标准就判，别手软；加分宁缺毋滥。"
     "评语不超过 15 字，要犀利、有梗、对事不对人。只输出 JSON。"
 )
 
@@ -117,7 +121,7 @@ def _now() -> str:
     "astrbot_plugin_zhiren_leaderboard",
     "yunyancuo",
     "智人排行榜 — @成员加/扣一分记分、成员信息库、周榜自动播报、@bot 查询、内置 Web 排行榜界面",
-    "1.7.1",
+    "1.7.5",
 )
 class ZhirenLeaderboardPlugin(Star):
     def __init__(self, context: Context):
@@ -455,7 +459,9 @@ class ZhirenLeaderboardPlugin(Star):
             )
             yield event.chain_result(
                 [
-                    At(qq=int(target_uid) if target_uid.isdigit() else target_uid),
+                    # 官方平台适配器会丢弃 At 组件，hex openid 退化为 <@id> 文本艾特
+                    At(qq=int(target_uid)) if target_uid.isdigit()
+                    else Plain(f"<@{target_uid}>"),
                     Plain(
                         f" 🧬 收到反馈：{'+' if delta > 0 else '-'}1\n"
                         f"理由：{parsed['reason']}\n"
@@ -478,7 +484,8 @@ class ZhirenLeaderboardPlugin(Star):
         )
         yield event.chain_result(
             [
-                At(qq=int(target_uid) if target_uid.isdigit() else target_uid),
+                At(qq=int(target_uid)) if target_uid.isdigit()
+                else Plain(f"<@{target_uid}>"),
                 Plain(
                     f" {arrow} {word} 1 分！\n"
                     f"理由：{parsed['reason']}\n"
@@ -549,7 +556,9 @@ class ZhirenLeaderboardPlugin(Star):
             return ""
         for attempt in range(2):
             try:
+                t0 = time.time()
                 resp = await primary.text_chat(prompt=prompt, system_prompt=system_prompt)
+                await self._record_llm_stat(primary, gid, t0, resp, len(prompt) + len(system_prompt))
                 text = (getattr(resp, "completion_text", "") or "").strip()
                 if text:
                     if attempt:
@@ -574,8 +583,10 @@ class ZhirenLeaderboardPlugin(Star):
             return
         cur_prompt = persona.system_prompt or ""
         row = self.db.execute("SELECT * FROM bot_policy WHERE id=1").fetchone()
-        base = (row["base_prompt"] if row and row["base_prompt"]
-                else cur_prompt.split(POLICY_MARKER)[0].rstrip())
+        # 以当前人格最新内容为准：人格可能被外部重写过，过期快照不得覆盖线上人设
+        base = cur_prompt.split(POLICY_MARKER)[0].rstrip()
+        if not base.strip():
+            base = (row["base_prompt"] if row and row["base_prompt"] else "")
         prev = row["policy_text"] if row else ""
         fb = self.db.execute(
             "SELECT delta, reason FROM bot_feedback ORDER BY id DESC LIMIT 30"
@@ -599,7 +610,7 @@ class ZhirenLeaderboardPlugin(Star):
                  if ln.strip().startswith("· ")]
         cur = "\n".join(f"{i}. {it}" for i, it in enumerate(items, 1)) or "（暂无）"
         prompt = (
-            "你是群聊机器人「酷狗」的行为准则维护器。群友通过加一分/扣一分给机器人打分："
+            f"你是群聊机器人「{pid}」的行为准则维护器。群友通过加一分/扣一分给机器人打分："
             "+1 表示这种表现受欢迎，-1 表示这种表现让人不满。\n\n"
             "【现行行为准则】（带编号）\n" + cur + "\n\n"
             "【最近评分反馈】\n" + "\n".join(lines) + "\n\n"
@@ -724,6 +735,55 @@ class ZhirenLeaderboardPlugin(Star):
                 + "\n\n【群友校准的行为边界（按评分反馈持续学习，优先级高于上述所有标准）】\n"
                 + policy)
 
+    async def _record_llm_stat(self, provider, gid: str, t0: float, resp,
+                               prompt_chars: int) -> None:
+        """插件直调 provider.text_chat 不经过 agent 运行时，AstrBot 面板的用量统计
+        （provider_stats 表）不会记录这些调用。这里手动补录一条，让 WebUI 用量与
+        真实消耗对得上。agent_type 用 internal 与面板统计口径一致；
+        失败只记 debug 日志，绝不影响判罚流程。"""
+        try:
+            from astrbot.core.db.po import ProviderStat
+            from astrbot.core.astr_agent_runtime import history as _ab_history
+            usage = getattr(resp, "usage", None)
+
+            def _tok(name: str) -> int:
+                try:
+                    return int(getattr(usage, name, 0) or 0)
+                except Exception:
+                    return 0
+
+            t_in_other = _tok("input_other")
+            t_in_cached = _tok("input_cached")
+            t_out = _tok("output")
+            if not (t_in_other or t_in_cached or t_out):
+                # 拿不到 usage 时按中文约 2 字/Token 粗估，保证统计不缺行
+                t_out = len(getattr(resp, "completion_text", "") or "") // 2
+                t_in_other = max(prompt_chars // 2, 1)
+            try:
+                pid = str(provider.meta().id)
+            except Exception:
+                pid = "unknown"
+            try:
+                pmodel = str(provider.get_model())
+            except Exception:
+                pmodel = None
+            async with _ab_history.db_helper.get_db() as session:
+                session.add(ProviderStat(
+                    agent_type="internal",
+                    status="completed",
+                    umo=f"aiocqhttp:GroupMessage:{gid}",
+                    provider_id=pid,
+                    provider_model=pmodel,
+                    token_input_other=t_in_other,
+                    token_input_cached=t_in_cached,
+                    token_output=t_out,
+                    start_time=t0,
+                    end_time=time.time(),
+                ))
+                await session.commit()
+        except Exception as e:
+            logger.debug(f"[智人排行榜] LLM 用量补录失败(不影响判罚): {e!r}")
+
     async def _ai_score_messages(self, gid: str, context: list[dict]):
         """分诊：证据确凿 → 立即判罚；疑似逆天 → 进入观察等群友反应。
         返回 (immediate_verdicts, watch_candidates)。"""
@@ -740,21 +800,24 @@ class ZhirenLeaderboardPlugin(Star):
             "请依据判罚标准审查新发言，分两类输出：\n"
             '1. 证据确凿、直接判罚、无需观察的：连续脏话刷屏、大段辱骂、少数人针对同一受害者的跟风辱骂（如「傻逼XXX」）、露骨性骚发言（针对具体的人的下流骚扰）——输出：'
             '{"id": 序号, "delta": 判罚分数, "reason": "评语", "watch": false}。'
-            "注意：大规模集体跟风辱骂是群友玩梗整活，全员放过、一个都不要输出；"
-            "偶尔几句脏话、不露骨的玩梗黄腔、群友间玩笑也一律放过。"
+            "注意：大规模集体跟风辱骂是群友玩梗整活，全员放过；"
+            "针对具体的人的恶意攻击一句就输出；口头禅脏字、群友间玩笑、"
+            "骂游戏骂设备等不针对人的泄愤、被挑衅后的对等反击一律放过。"
             "delta 只能是 -1、0 或 +1：违规扣分一律 -1（禁止 -2/-3），命中加分项（金句/助人/干货/幽默/救场）一律 +1；"
-            "判罚可判可不判时倾向放过，加分可加可不加时倾向 +1。"
+            "判罚证据对得上标准就输出、别缩；加分可加可不加时倾向不加。"
             "已被引用为判罚证据的群友回应（下文）不要再判罚。\n"
             '2. 文本本身看不出的品行类疑似（如疑似放鸽子、甩锅、骗人，需要群友反应佐证）：'
             '{"id": 序号, "delta": 0, "reason": "疑似点(15字内)", "watch": true}，进入观察期\n'
             f"正常发言忽略。最多输出 {AI_MAX_JUDGMENTS} 条。只输出 JSON 数组，不要任何其他文字。\n\n"
             + self._transcript(context, self._ai_judged, self._ai_reviewed)
         )
+        t0 = time.time()
         try:
             resp = await provider.text_chat(prompt=prompt, system_prompt=self._judge_system_prompt())
         except Exception as e:
             logger.warning(f"[智人排行榜] AI 裁判调用失败: {e!r}")
             return [], []
+        await self._record_llm_stat(provider, gid, t0, resp, len(prompt) + len(self._judge_system_prompt()))
         raw = getattr(resp, "completion_text", "") or ""
         verdicts = []
         watch_new = []
@@ -807,17 +870,19 @@ class ZhirenLeaderboardPlugin(Star):
             f"以下是群聊上下文记录。请专注评估成员「{name}」(QQ:{uid}) 的近期言行"
             "（其发言已用【目标】标出），结合上下文与其他群友对其发言的反应（嘲笑、声讨、附和），给出最终裁决："
             f"delta 为 -{AI_SCORE_LIMIT}~+{AI_SCORE_LIMIT} 的整数（0=证据仍不足，继续观察；扣分一律 -1、加分一律 +1，禁止更重），"
-            "总体口径：判罚从严从宽放过，加分从宽倾向给。"
+            "总体口径：判罚该判就判、别缩；加分宁缺毋滥。"
             'reason 为不超过 15 字的评语。只输出 JSON：{"delta": 分数, "reason": "评语"}。\n'
             "注意：其他群友的回应只是判罚证据，不要对其回应发言另行扣分。\n\n"
             + hint_line
             + self._transcript(buf, target_uid=uid)
         )
+        t0 = time.time()
         try:
             resp = await provider.text_chat(prompt=prompt, system_prompt=self._judge_system_prompt())
         except Exception as e:
             logger.warning(f"[智人排行榜] AI 裁判调用失败: {e!r}")
             return []
+        await self._record_llm_stat(provider, gid, t0, resp, len(prompt) + len(self._judge_system_prompt()))
         obj = extract_json_object(getattr(resp, "completion_text", "") or "")
         if not obj:
             return []
@@ -854,7 +919,10 @@ class ZhirenLeaderboardPlugin(Star):
             chain = []
             if m.get("mid"):
                 chain.append(Reply(id=m["mid"]))
-            chain.append(At(qq=int(m["uid"]) if m["uid"].isdigit() else m["uid"]))
+            if m["uid"].isdigit():
+                chain.append(At(qq=int(m["uid"])))
+            else:
+                chain.append(Plain(f"<@{m['uid']}>"))
             chain.append(Plain(
                 f" {prefix}：{sign}{d} 分（现 {total} 分）\n评语：{r}"
             ))
