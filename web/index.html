@@ -6,9 +6,11 @@
 <title>智人排行榜</title>
 <style>
   :root{
-    --bg:#0b0f1a; --card:rgba(255,255,255,.045); --card-border:rgba(255,255,255,.08);
-    --text:#e7ecf5; --muted:#8a93a6; --accent:#6c8cff; --accent2:#22d3ee;
-    --plus:#34d399; --minus:#f87171; --gold:#fbbf24; --silver:#cbd5e1; --bronze:#f59e0b;
+    --bg:#0b0f1a; --card:rgba(255,255,255,.045); --card-hover:rgba(255,255,255,.07);
+    --card-border:rgba(255,255,255,.08); --text:#e7ecf5; --muted:#8a93a6;
+    --accent:#6c8cff; --accent2:#22d3ee; --plus:#34d399; --minus:#f87171;
+    --gold:#fbbf24; --silver:#cbd5e1; --bronze:#f59e0b;
+    --error-bg:rgba(248,113,113,.12); --error-border:rgba(248,113,113,.35);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -18,229 +20,743 @@
       radial-gradient(1200px 500px at 80% -10%, rgba(108,140,255,.14), transparent 60%),
       radial-gradient(900px 400px at 0% 110%, rgba(34,211,238,.10), transparent 60%),
       var(--bg);
-    color:var(--text); min-height:100%;
+    color:var(--text); min-height:100%; line-height:1.5;
   }
   .wrap{max-width:860px;margin:0 auto;padding:32px 20px 80px}
   header{display:flex;align-items:center;gap:14px;margin-bottom:6px}
-  .logo{width:46px;height:46px;border-radius:14px;display:flex;align-items:center;justify-content:center;
-    background:linear-gradient(135deg,var(--accent),var(--accent2));font-size:24px;box-shadow:0 8px 24px rgba(108,140,255,.35)}
-  h1{font-size:26px;letter-spacing:.5px}
-  h1 .en{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
-  .sub{color:var(--muted);font-size:13px;margin:6px 0 22px 60px}
-  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:18px}
-  select,input[type=search]{
-    background:var(--card);border:1px solid var(--card-border);color:var(--text);
-    border-radius:10px;padding:9px 12px;font-size:14px;outline:none;
+  .logo{
+    width:46px;height:46px;border-radius:14px;flex:none;
+    display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    font-size:24px;box-shadow:0 8px 24px rgba(108,140,255,.35)
   }
-  select:focus,input:focus{border-color:var(--accent)}
-  .tabs{display:flex;background:var(--card);border:1px solid var(--card-border);border-radius:10px;padding:3px;margin-left:auto}
-  .tab{border:0;background:transparent;color:var(--muted);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:14px}
-  .tab.active{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-weight:600}
-  .week-chip{color:var(--muted);font-size:13px;margin-left:10px}
-  /* 前三名 */
-  .podium{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:26px 0 18px;align-items:end}
-  .p-card{background:var(--card);border:1px solid var(--card-border);border-radius:16px;padding:18px 12px;text-align:center;position:relative;overflow:hidden}
+  h1{font-size:26px;letter-spacing:.5px}
+  h1 .en{
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text;background-clip:text;color:transparent
+  }
+  .sub{color:var(--muted);font-size:13px;margin:6px 0 22px 60px}
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px}
+  select,input[type=search],.btn{
+    background:var(--card);border:1px solid var(--card-border);color:var(--text);
+    border-radius:10px;padding:9px 12px;font-size:14px;outline:none;transition:border-color .15s,background .15s;
+  }
+  select{max-width:240px}
+  select option{background:#111726;color:var(--text)}
+  input[type=search]{min-width:160px;flex:1 1 160px;max-width:240px}
+  select:focus-visible,input:focus-visible,.btn:focus-visible,.tab:focus-visible,
+  .p-card:focus-visible,.row:focus-visible,.close:focus-visible{
+    border-color:var(--accent);box-shadow:0 0 0 2px rgba(108,140,255,.35);outline:none;
+  }
+  .btn{cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+  .btn:hover{background:var(--card-hover);border-color:rgba(108,140,255,.45)}
+  .btn.active{border-color:var(--accent);color:#fff;background:rgba(108,140,255,.18)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .tabs{
+    display:flex;background:var(--card);border:1px solid var(--card-border);
+    border-radius:10px;padding:3px;margin-left:auto
+  }
+  .tab{
+    border:0;background:transparent;color:var(--muted);padding:7px 16px;
+    border-radius:8px;cursor:pointer;font-size:14px;transition:.15s
+  }
+  .tab:hover{color:var(--text)}
+  .tab.active{
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    color:#fff;font-weight:600
+  }
+  .meta-bar{
+    display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+    gap:8px;margin-bottom:14px;color:var(--muted);font-size:13px
+  }
+  .week-chip{
+    display:inline-flex;align-items:center;gap:4px;
+    background:rgba(108,140,255,.12);border:1px solid rgba(108,140,255,.28);
+    color:var(--text);padding:3px 10px;border-radius:999px;font-size:12px
+  }
+  .week-chip:empty{display:none}
+  .banner{
+    display:none;align-items:center;justify-content:space-between;gap:12px;
+    padding:12px 14px;border-radius:12px;margin-bottom:16px;font-size:13px;
+    background:var(--error-bg);border:1px solid var(--error-border);color:#fecaca;
+  }
+  .banner.show{display:flex}
+  .loading-box{
+    display:none;flex-direction:column;align-items:center;justify-content:center;
+    gap:10px;padding:56px 0;color:var(--muted);font-size:14px
+  }
+  .loading-box.show{display:flex}
+  .spinner{
+    width:26px;height:26px;border-radius:50%;
+    border:3px solid rgba(255,255,255,.14);border-top-color:var(--accent2);
+    animation:spin .8s linear infinite
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  /* 前三名领奖台 */
+  .podium{
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:12px;margin:22px 0 18px;align-items:end
+  }
+  .p-card{
+    background:var(--card);border:1px solid var(--card-border);border-radius:16px;
+    padding:18px 12px;text-align:center;position:relative;overflow:hidden;
+    cursor:pointer;transition:transform .15s,border-color .15s,background .15s;
+  }
+  .p-card:hover{background:var(--card-hover);border-color:rgba(108,140,255,.45)}
   .p-card .medal{font-size:26px}
-  .p-card .avatar{width:52px;height:52px;border-radius:50%;margin:8px auto 8px;display:flex;align-items:center;justify-content:center;
-    font-size:22px;font-weight:700;color:#fff;background:linear-gradient(135deg,#5470ff,#22d3ee)}
-  .p-card.first{transform:scale(1.08);border-color:rgba(251,191,36,.45);box-shadow:0 10px 30px rgba(251,191,36,.12);z-index:1}
+  .p-card .avatar{
+    width:52px;height:52px;border-radius:50%;margin:8px auto 8px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:22px;font-weight:700;color:#fff;
+    background:linear-gradient(135deg,#5470ff,#22d3ee)
+  }
+  .p-card.first{
+    transform:scale(1.06);border-color:rgba(251,191,36,.45);
+    box-shadow:0 10px 30px rgba(251,191,36,.12);z-index:1
+  }
   .p-card.first .avatar{background:linear-gradient(135deg,#f59e0b,#fbbf24)}
-  .p-card .name{font-weight:600;font-size:15px;margin-bottom:4px;word-break:break-all}
-  .p-card .score{font-size:26px;font-weight:800}
-  .p-card .delta{font-size:12px;color:var(--muted)}
+  .p-card .name{
+    font-weight:600;font-size:15px;margin-bottom:4px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+  }
+  .p-card .score{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums}
+  .p-card .delta{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
   /* 列表 */
   .list{display:flex;flex-direction:column;gap:8px}
-  .row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--card-border);
-    border-radius:12px;padding:11px 14px;cursor:pointer;transition:.15s}
-  .row:hover{transform:translateX(3px);border-color:rgba(108,140,255,.4)}
-  .rank{width:30px;text-align:center;color:var(--muted);font-weight:700}
-  .rank.top{font-size:18px}
-  .avatar-s{width:34px;height:34px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
-    font-size:15px;font-weight:700;color:#fff;background:linear-gradient(135deg,#5470ff,#22d3ee)}
+  .row{
+    display:flex;align-items:center;gap:12px;background:var(--card);
+    border:1px solid var(--card-border);border-radius:12px;padding:11px 14px;
+    cursor:pointer;transition:.15s
+  }
+  .row:hover{transform:translateX(3px);border-color:rgba(108,140,255,.4);background:var(--card-hover)}
+  .rank{width:34px;text-align:center;color:var(--muted);font-weight:700;font-variant-numeric:tabular-nums}
+  .avatar-s{
+    width:34px;height:34px;border-radius:50%;flex:none;
+    display:flex;align-items:center;justify-content:center;
+    font-size:15px;font-weight:700;color:#fff;
+    background:linear-gradient(135deg,#5470ff,#22d3ee)
+  }
   .col-name{flex:1;min-width:0}
   .nm{font-weight:600;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .sub-info{color:var(--muted);font-size:12px;margin-top:2px}
-  .pts{text-align:right}
+  .sub-info{color:var(--muted);font-size:12px;margin-top:2px;font-variant-numeric:tabular-nums}
+  .pts{text-align:right;font-variant-numeric:tabular-nums}
   .pts .v{font-size:20px;font-weight:800}
-  .pts .v.up{color:var(--plus)} .pts .v.down{color:var(--minus)}
   .pts .d{font-size:11.5px;color:var(--muted)}
-  /* 抽屉 */
-  .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:.2s;z-index:9}
-  .drawer{position:fixed;top:0;right:-420px;width:min(420px,92vw);height:100%;background:#111726;
-    border-left:1px solid var(--card-border);z-index:10;transition:right .25s;overflow-y:auto;padding:22px}
-  .drawer.open{right:0} .mask.open{opacity:1;pointer-events:auto}
-  .drawer h2{font-size:18px;margin-bottom:4px}
-  .drawer .close{position:absolute;top:16px;right:16px;background:none;border:0;color:var(--muted);font-size:22px;cursor:pointer}
+  .up,.up-c{color:var(--plus)}
+  .down,.down-c{color:var(--minus)}
+  /* 个人详情抽屉 */
+  .mask{
+    position:fixed;inset:0;background:rgba(0,0,0,.55);
+    opacity:0;pointer-events:none;transition:.2s;z-index:9
+  }
+  .drawer{
+    position:fixed;top:0;right:-440px;width:min(420px,92vw);height:100%;
+    background:#111726;border-left:1px solid var(--card-border);
+    z-index:10;transition:right .25s;overflow-y:auto;padding:22px
+  }
+  .drawer.open{right:0}
+  .mask.open{opacity:1;pointer-events:auto}
+  .drawer h2{font-size:18px;margin-bottom:4px;padding-right:34px;word-break:break-word}
+  .drawer .close{
+    position:absolute;top:14px;right:14px;background:none;border:1px solid transparent;
+    color:var(--muted);font-size:20px;width:32px;height:32px;border-radius:8px;
+    cursor:pointer;display:flex;align-items:center;justify-content:center
+  }
+  .drawer .close:hover{color:var(--text);background:var(--card)}
+  .drawer-uid{color:var(--muted);font-size:12px;word-break:break-all}
   .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}
-  .stat{background:var(--card);border:1px solid var(--card-border);border-radius:10px;padding:10px;text-align:center}
-  .stat .k{color:var(--muted);font-size:11.5px} .stat .v{font-size:18px;font-weight:700;margin-top:4px}
-  .rec{border-left:2px solid rgba(108,140,255,.3);margin:10px 0 10px 6px;padding:2px 0 2px 12px}
-  .rec .l1{font-size:13px} .rec .l2{color:var(--muted);font-size:12px;margin-top:2px}
-  .up-c{color:var(--plus)} .down-c{color:var(--minus)}
-  .empty{color:var(--muted);text-align:center;padding:60px 0;font-size:14px}
-  footer{margin-top:34px;color:var(--muted);font-size:12px;text-align:center;line-height:1.8}
-  @media (max-width:560px){ .podium{gap:8px} .p-card.first{transform:none} h1{font-size:21px} .sub{margin-left:0} }
+  .stat{
+    background:var(--card);border:1px solid var(--card-border);
+    border-radius:10px;padding:10px;text-align:center;font-variant-numeric:tabular-nums
+  }
+  .stat .k{color:var(--muted);font-size:11.5px}
+  .stat .v{font-size:18px;font-weight:700;margin-top:4px}
+  .rec-title{color:var(--muted);font-size:13px;margin-top:16px;margin-bottom:6px}
+  .rec{
+    border-left:2px solid rgba(108,140,255,.35);
+    margin:10px 0 10px 6px;padding:2px 0 2px 12px
+  }
+  .rec .l1{font-size:13px;word-break:break-word}
+  .rec .l1 .delta-badge{font-weight:700;margin-right:6px;font-variant-numeric:tabular-nums}
+  .rec .l2{color:var(--muted);font-size:12px;margin-top:2px}
+  .empty{color:var(--muted);text-align:center;padding:56px 12px;font-size:14px}
+  footer{margin-top:34px;color:var(--muted);font-size:12px;text-align:center;line-height:1.9}
+  @media (max-width:600px){
+    .wrap{padding:20px 14px 64px}
+    .podium{gap:8px}
+    .p-card{padding:14px 8px}
+    .p-card.first{transform:none}
+    .p-card .avatar{width:42px;height:42px;font-size:18px}
+    .p-card .score{font-size:22px}
+    h1{font-size:21px}
+    .sub{margin-left:0;margin-bottom:16px}
+    .tabs{margin-left:0;width:100%}
+    .tab{flex:1}
+    select,input[type=search]{max-width:none;width:100%;flex:1 1 100%}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">🏆</div>
+    <div class="logo" aria-hidden="true">🏆</div>
     <h1>智人<span class="en">排行榜</span></h1>
   </header>
   <div class="sub">@成员 加一分 / 扣一分 即时记分 · 每周一自动播报周榜 · 数据实时同步</div>
 
   <div class="toolbar">
-    <select id="groupSel"></select>
-    <input type="search" id="search" placeholder="搜索成员…">
-    <div class="tabs">
-      <button class="tab active" data-tab="weekly">本周榜</button>
-      <button class="tab" data-tab="total">总分榜</button>
+    <select id="groupSel" aria-label="选择群聊"></select>
+    <input type="search" id="search" placeholder="搜索成员昵称或 ID…" aria-label="搜索成员">
+    <button type="button" class="btn" id="orderBtn" title="切换正序/倒序" aria-pressed="false">正序</button>
+    <button type="button" class="btn" id="refreshBtn" title="立即刷新数据">刷新</button>
+    <div class="tabs" role="tablist" aria-label="榜单类型">
+      <button type="button" class="tab active" data-tab="weekly" role="tab" aria-selected="true">本周榜</button>
+      <button type="button" class="tab" data-tab="total" role="tab" aria-selected="false">总分榜</button>
     </div>
+  </div>
+
+  <div class="meta-bar">
+    <span id="curGroup"></span>
     <span class="week-chip" id="weekChip"></span>
   </div>
-  <div class="sub" id="curGroup" style="margin-top:-12px"></div>
 
-  <div class="podium" id="podium"></div>
+  <div class="banner" id="errorBanner" role="alert">
+    <span id="errorText">数据加载失败，请检查网络连接</span>
+    <button type="button" class="btn" id="retryBtn">重试</button>
+  </div>
+
+  <div class="loading-box show" id="loading" aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <span>正在加载排行榜数据…</span>
+  </div>
+
+  <div class="podium" id="podium" style="display:none"></div>
   <div class="list" id="list"></div>
-  <div class="empty" id="empty" style="display:none">暂无记录 —— 在群里发「@某成员 加一分 理由」开始记分吧</div>
+  <div class="empty" id="empty" style="display:none"></div>
 
   <footer>
-    <span id="updatedAt"></span> · 每 30 秒自动刷新<br>
-    查询指令：@机器人 总分榜 ｜ 周榜 ｜ 查询 @某人 ｜ 我的得分
+    <span id="updatedAt">正在同步…</span> · 每 30 秒自动刷新<br>
+    查询指令：@机器人 总分榜 ｜ 周榜 ｜ 倒序 ｜ 查询 @某人 ｜ 我的得分
   </footer>
 </div>
 
-<div class="mask" id="mask"></div>
-<aside class="drawer" id="drawer">
-  <button class="close" id="drawerClose">✕</button>
+<div class="mask" id="mask" aria-hidden="true"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dName" aria-hidden="true">
+  <button type="button" class="close" id="drawerClose" aria-label="关闭详情">✕</button>
   <h2 id="dName">—</h2>
-  <div style="color:var(--muted);font-size:12px" id="dUid"></div>
+  <div class="drawer-uid" id="dUid"></div>
   <div class="stat-grid">
     <div class="stat"><div class="k">总分</div><div class="v" id="dTotal">0</div></div>
     <div class="stat"><div class="k">本周</div><div class="v" id="dWeek">0</div></div>
     <div class="stat"><div class="k">加 / 扣次数</div><div class="v" id="dPM">0/0</div></div>
   </div>
-  <div style="color:var(--muted);font-size:13px;margin-top:16px">最近记录</div>
+  <div class="rec-title">最近记录</div>
   <div id="dRecords"></div>
 </aside>
 
 <script>
-const $ = s => document.querySelector(s);
-let tab = 'weekly', gid = '', data = null, timer = null;
+(() => {
+  'use strict';
 
-async function loadGroups(){
-  const r = await fetch('/api/groups').then(r=>r.json()).catch(()=>({groups:[]}));
-  const gs = r.groups || [];
-  $('#groupSel').innerHTML = gs.length
-    ? gs.map(g=>`<option value="${g.gid}">${esc(g.name)}（${g.count}条）</option>`).join('')
-    : '<option value="">暂无群数据</option>';
-  // 优先级：URL ?gid= > 上次浏览的群 > 第一个群
-  const urlGid = new URLSearchParams(location.search).get('gid');
-  const savedGid = localStorage.getItem('zhiren_gid');
-  gid = [urlGid, savedGid].find(v => v && gs.some(g=>g.gid===v)) || gs[0]?.gid || '';
-  if(gid) $('#groupSel').value = gid;
-}
+  const $ = (selector) => document.querySelector(selector);
 
-async function load(){
-  const q = gid ? '?gid='+encodeURIComponent(gid) : '';
-  data = await fetch('/api/data'+q).then(r=>r.json()).catch(()=>null);
-  if(!data) return;
-  gid = data.gid || gid;
-  if($('#groupSel').value !== gid) $('#groupSel').value = gid;
-  const opt = $('#groupSel').selectedOptions[0];
-  $('#curGroup').textContent = opt
-    ? ('📌 当前群：' + opt.textContent.replace(/（\d+条）$/, '') + ' · 本群榜单独立统计，切换群请用左上角下拉框')
-    : '';
-  localStorage.setItem('zhiren_gid', gid);
-  history.replaceState(null, '', gid ? '/?gid='+encodeURIComponent(gid) : '/');
-  $('#weekChip').textContent = tab==='weekly' ? (' week: '+data.week_label) : '';
-  render();
-  $('#updatedAt').textContent = '更新于 '+data.updated_at;
-}
+  let tab = 'weekly';
+  let reverseOrder = false;
+  let gid = '';
+  let data = null;
+  let groups = [];
+  let timer = null;
+  let dataAbort = null;
+  let memberAbort = null;
+  let lastTriggerEl = null;
 
-function fmtRows(){
-  const rows = tab==='weekly' ? data.weekly : data.total;
-  return rows.map(r=>({
-    uid:String(r.uid),
-    name:r.name || ('QQ'+r.uid),
-    v: tab==='weekly' ? (r.delta||0) : (r.total||0),
-    plus: tab==='weekly' ? (r.plus||0) : (r.plus||0),
-    minus: tab==='weekly' ? (r.minus||0) : (r.minus||0),
-  }));
-}
+  function storageGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
 
-function render(){
-  const kw = $('#search').value.trim().toLowerCase();
-  const rows = fmtRows().filter(r=>!kw || r.name.toLowerCase().includes(kw) || r.uid.includes(kw));
-  const pod = $('#podium'), list = $('#list');
-  pod.innerHTML=''; list.innerHTML='';
-  $('#empty').style.display = rows.length ? 'none' : 'block';
-  const medals=['🥇','🥈','🥉'], order=['second','first','third'], idx=[1,0,2];
-  rows.slice(0,3).forEach((r,i)=>{
-    const pos = idx[i];
-    const div = document.createElement('div');
-    div.className = 'p-card ' + (pos===1?'first':'');
-    div.style.order = pos;
-    div.innerHTML = `<div class="medal">${medals[i]}</div>
-      <div class="avatar">${r.name.slice(0,1)}</div>
-      <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
-      <div class="score ${r.v>0?'up':r.v<0?'down':''}" style="color:${r.v>0?'var(--plus)':r.v<0?'var(--minus)':'var(--text)'}">${r.v>0?'+':''}${r.v}</div>
-      <div class="delta">+${r.plus} / -${r.minus}</div>`;
-    div.onclick = ()=>openDrawer(r.uid);
-    pod.appendChild(div);
+  function storageSet(key, val) {
+    try {
+      window.localStorage.setItem(key, val);
+    } catch {
+      // 无痕模式或沙盒环境忽略本地存储异常
+    }
+  }
+
+  function safeNumber(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatSigned(n) {
+    const num = safeNumber(n);
+    return (num > 0 ? '+' : '') + String(num);
+  }
+
+  function scoreClass(n) {
+    const num = safeNumber(n);
+    if (num > 0) return 'up';
+    if (num < 0) return 'down';
+    return '';
+  }
+
+  function firstChar(name) {
+    const chars = Array.from(String(name || '').trim());
+    return chars.length ? chars[0] : '?';
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  async function fetchJson(url, signal) {
+    const resp = await fetch(url, {
+      signal,
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!resp.ok) {
+      throw new Error('HTTP ' + resp.status);
+    }
+    return resp.json();
+  }
+
+  function setError(message) {
+    const banner = $('#errorBanner');
+    if (!message) {
+      banner.classList.remove('show');
+      return;
+    }
+    $('#errorText').textContent = message;
+    banner.classList.add('show');
+  }
+
+  function setLoading(show) {
+    $('#loading').classList.toggle('show', Boolean(show));
+  }
+
+  function syncUrlGid(currentGid) {
+    try {
+      const url = new URL(window.location.href);
+      if (currentGid) {
+        url.searchParams.set('gid', currentGid);
+      } else {
+        url.searchParams.delete('gid');
+      }
+      window.history.replaceState(null, '', url.pathname + url.search);
+    } catch {
+      // 忽略异常环境下的 history 操作
+    }
+  }
+
+  function renderGroupSelect() {
+    const sel = $('#groupSel');
+    const frag = document.createDocumentFragment();
+    if (!groups.length) {
+      const opt = el('option', '', '暂无群数据');
+      opt.value = '';
+      frag.appendChild(opt);
+    } else {
+      for (const g of groups) {
+        const gId = String(g.gid ?? '');
+        const gName = String(g.name || ('群 ' + gId));
+        const count = safeNumber(g.count);
+        const opt = el('option', '', `${gName}（${count}条）`);
+        opt.value = gId;
+        frag.appendChild(opt);
+      }
+    }
+    sel.replaceChildren(frag);
+    if (gid && groups.some((g) => String(g.gid) === gid)) {
+      sel.value = gid;
+    }
+  }
+
+  async function loadGroups(keepCurrent = false) {
+    try {
+      const res = await fetchJson('/api/groups');
+      groups = Array.isArray(res.groups) ? res.groups : [];
+    } catch {
+      if (!keepCurrent) {
+        groups = [];
+      }
+    }
+    if (!keepCurrent || !gid || !groups.some((g) => String(g.gid) === gid)) {
+      const urlGid = new URLSearchParams(window.location.search).get('gid');
+      const savedGid = storageGet('zhiren_gid');
+      const matched = [urlGid, savedGid].find(
+        (v) => v && groups.some((g) => String(g.gid) === v)
+      );
+      gid = matched || (groups[0] ? String(groups[0].gid) : '');
+    }
+    renderGroupSelect();
+  }
+
+  async function load({ showSpinner = false, refreshGroups = false } = {}) {
+    if (dataAbort) {
+      dataAbort.abort();
+    }
+    const controller = new AbortController();
+    dataAbort = controller;
+
+    if (showSpinner && !data) {
+      setLoading(true);
+    }
+    const refreshBtn = $('#refreshBtn');
+    refreshBtn.disabled = true;
+
+    try {
+      if (refreshGroups) {
+        await loadGroups(true);
+      }
+      const query = gid ? '?gid=' + encodeURIComponent(gid) : '';
+      const payload = await fetchJson('/api/data' + query, controller.signal);
+      if (controller.signal.aborted) return;
+
+      data = payload;
+      setError('');
+      if (payload.gid) {
+        gid = String(payload.gid);
+      }
+      if ($('#groupSel').value !== gid && groups.some((g) => String(g.gid) === gid)) {
+        $('#groupSel').value = gid;
+      }
+
+      const activeGroup = groups.find((g) => String(g.gid) === gid);
+      $('#curGroup').textContent = activeGroup
+        ? `📌 当前群：${activeGroup.name} · 本群榜单独立统计`
+        : (gid ? `📌 当前群：群 ${gid}` : '');
+
+      if (gid) {
+        storageSet('zhiren_gid', gid);
+      }
+      syncUrlGid(gid);
+      $('#updatedAt').textContent = payload.updated_at ? `更新于 ${payload.updated_at}` : '已同步';
+      render();
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      setError('加载排行榜失败，请稍后重试');
+    } finally {
+      if (dataAbort === controller) {
+        setLoading(false);
+        refreshBtn.disabled = false;
+      }
+    }
+  }
+
+  function formatRows() {
+    if (!data) return [];
+    const source = tab === 'weekly'
+      ? (Array.isArray(data.weekly) ? data.weekly : [])
+      : (Array.isArray(data.total) ? data.total : []);
+    const mapped = source.map((r) => {
+      const uid = String(r.uid ?? '');
+      return {
+        uid,
+        name: String(r.name || ('QQ' + uid)),
+        v: tab === 'weekly' ? safeNumber(r.delta) : safeNumber(r.total),
+        plus: safeNumber(r.plus),
+        minus: safeNumber(r.minus),
+      };
+    });
+    return reverseOrder ? mapped.reverse() : mapped;
+  }
+
+  function bindCardInteraction(node, uid) {
+    node.tabIndex = 0;
+    node.setAttribute('role', 'button');
+    node.addEventListener('click', () => {
+      lastTriggerEl = node;
+      openDrawer(uid);
+    });
+    node.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        lastTriggerEl = node;
+        openDrawer(uid);
+      }
+    });
+  }
+
+  function render() {
+    $('#weekChip').textContent =
+      tab === 'weekly' && data && data.week_label ? `本周：${data.week_label}` : '';
+
+    const kw = $('#search').value.trim().toLowerCase();
+    const allRows = formatRows();
+    const rows = allRows.filter(
+      (r) => !kw || r.name.toLowerCase().includes(kw) || r.uid.toLowerCase().includes(kw)
+    );
+
+    const pod = $('#podium');
+    const list = $('#list');
+    const empty = $('#empty');
+    pod.replaceChildren();
+    list.replaceChildren();
+
+    if (!rows.length) {
+      pod.style.display = 'none';
+      empty.style.display = 'block';
+      empty.textContent = kw
+        ? `未找到匹配「${$('#search').value.trim()}」的成员`
+        : '暂无记录 —— 在群里发「@某成员 加一分 理由」开始记分吧';
+      return;
+    }
+
+    empty.style.display = 'none';
+    const showPodium = !kw && !reverseOrder;
+
+    if (showPodium) {
+      const medals = ['🥇', '🥈', '🥉'];
+      const orderPos = [1, 0, 2];
+      const podFrag = document.createDocumentFragment();
+
+      rows.slice(0, 3).forEach((r, i) => {
+        const pos = orderPos[i];
+        const card = el('div', 'p-card' + (pos === 1 ? ' first' : ''));
+        card.style.order = String(pos);
+        card.setAttribute('aria-label', `查看 ${r.name} 的得分详情`);
+
+        card.appendChild(el('div', 'medal', medals[i]));
+        card.appendChild(el('div', 'avatar', firstChar(r.name)));
+
+        const nameEl = el('div', 'name', r.name);
+        nameEl.title = r.name;
+        card.appendChild(nameEl);
+
+        const sCls = scoreClass(r.v);
+        card.appendChild(el('div', 'score' + (sCls ? ' ' + sCls : ''), formatSigned(r.v)));
+        card.appendChild(el('div', 'delta', `+${r.plus} / -${r.minus}`));
+
+        bindCardInteraction(card, r.uid);
+        podFrag.appendChild(card);
+      });
+
+      pod.appendChild(podFrag);
+      pod.style.display = 'grid';
+    } else {
+      pod.style.display = 'none';
+    }
+
+    const listRows = showPodium ? rows.slice(3) : rows;
+    const rankStart = showPodium ? 4 : 1;
+    const listFrag = document.createDocumentFragment();
+
+    listRows.forEach((r, i) => {
+      const row = el('div', 'row');
+      row.setAttribute('aria-label', `查看 ${r.name} 的得分详情`);
+
+      row.appendChild(el('div', 'rank', String(rankStart + i)));
+      row.appendChild(el('div', 'avatar-s', firstChar(r.name)));
+
+      const colName = el('div', 'col-name');
+      const nm = el('div', 'nm', r.name);
+      nm.title = r.name;
+      colName.appendChild(nm);
+      colName.appendChild(el('div', 'sub-info', `+${r.plus} / -${r.minus}`));
+      row.appendChild(colName);
+
+      const pts = el('div', 'pts');
+      const sCls = scoreClass(r.v);
+      pts.appendChild(el('div', 'v' + (sCls ? ' ' + sCls : ''), formatSigned(r.v)));
+      pts.appendChild(el('div', 'd', '分'));
+      row.appendChild(pts);
+
+      bindCardInteraction(row, r.uid);
+      listFrag.appendChild(row);
+    });
+
+    list.appendChild(listFrag);
+  }
+
+  function showDrawerOpen() {
+    const drawer = $('#drawer');
+    const mask = $('#mask');
+    drawer.classList.add('open');
+    mask.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+    mask.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeDrawer() {
+    if (memberAbort) {
+      memberAbort.abort();
+      memberAbort = null;
+    }
+    const drawer = $('#drawer');
+    const mask = $('#mask');
+    drawer.classList.remove('open');
+    mask.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+    mask.setAttribute('aria-hidden', 'true');
+    if (lastTriggerEl && typeof lastTriggerEl.focus === 'function') {
+      lastTriggerEl.focus();
+      lastTriggerEl = null;
+    }
+  }
+
+  async function openDrawer(uid) {
+    if (!gid || !uid) return;
+    if (memberAbort) {
+      memberAbort.abort();
+    }
+    const controller = new AbortController();
+    memberAbort = controller;
+
+    $('#dName').textContent = '加载中…';
+    $('#dUid').textContent = `ID ${uid}`;
+    $('#dTotal').textContent = '—';
+    $('#dTotal').className = 'v';
+    $('#dWeek').textContent = '—';
+    $('#dWeek').className = 'v';
+    $('#dPM').textContent = '—';
+
+    const rc = $('#dRecords');
+    rc.replaceChildren(el('div', 'empty', '正在获取成员详情…'));
+    showDrawerOpen();
+    $('#drawerClose').focus();
+
+    try {
+      const d = await fetchJson(
+        `/api/member?gid=${encodeURIComponent(gid)}&uid=${encodeURIComponent(uid)}`,
+        controller.signal
+      );
+      if (controller.signal.aborted) return;
+
+      if (!d || !d.name) {
+        $('#dName').textContent = '未找到成员记录';
+        rc.replaceChildren(el('div', 'empty', '暂无该成员的积分详情'));
+        return;
+      }
+
+      $('#dName').textContent = String(d.name);
+      $('#dUid').textContent = `ID ${d.uid}`;
+
+      const totalVal = safeNumber(d.total);
+      const totalEl = $('#dTotal');
+      totalEl.textContent = formatSigned(totalVal);
+      totalEl.className = 'v' + (scoreClass(totalVal) ? ' ' + scoreClass(totalVal) : '');
+
+      const weekVal = safeNumber(d.week_delta);
+      const weekEl = $('#dWeek');
+      weekEl.textContent = formatSigned(weekVal);
+      weekEl.className = 'v' + (scoreClass(weekVal) ? ' ' + scoreClass(weekVal) : '');
+
+      $('#dPM').textContent = `${safeNumber(d.plus)}/${safeNumber(d.minus)}`;
+
+      const records = Array.isArray(d.records) ? d.records : [];
+      if (!records.length) {
+        const emptyRec = el('div', 'empty', '暂无记录');
+        emptyRec.style.padding = '20px 0';
+        rc.replaceChildren(emptyRec);
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      for (const r of records) {
+        const rec = el('div', 'rec');
+        const l1 = el('div', 'l1');
+        const deltaNum = safeNumber(r.delta);
+        const badge = el(
+          'span',
+          'delta-badge ' + (deltaNum >= 0 ? 'up-c' : 'down-c'),
+          formatSigned(deltaNum)
+        );
+        l1.appendChild(badge);
+        l1.appendChild(document.createTextNode(String(r.reason || '')));
+        rec.appendChild(l1);
+
+        const createdAt = String(r.created_at || '');
+        const operator = String(r.operator_name || '?');
+        rec.appendChild(el('div', 'l2', `${createdAt} · by ${operator}`));
+        frag.appendChild(rec);
+      }
+      rc.replaceChildren(frag);
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      $('#dName').textContent = '加载失败';
+      const errWrap = el('div', 'empty', '获取成员记录失败');
+      errWrap.style.padding = '20px 0';
+      const retry = el('button', 'btn', '重试');
+      retry.type = 'button';
+      retry.style.marginTop = '10px';
+      retry.addEventListener('click', () => openDrawer(uid));
+      errWrap.appendChild(document.createElement('br'));
+      errWrap.appendChild(retry);
+      rc.replaceChildren(errWrap);
+    }
+  }
+
+  document.querySelectorAll('.tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((x) => {
+        const isCurrent = x === btn;
+        x.classList.toggle('active', isCurrent);
+        x.setAttribute('aria-selected', String(isCurrent));
+      });
+      tab = btn.dataset.tab || 'weekly';
+      render();
+    });
   });
-  pod.style.display = rows.length? 'grid':'none';
-  rows.slice(3).forEach((r,i)=>{
-    const d = document.createElement('div');
-    d.className='row';
-    d.innerHTML = `<div class="rank">${i+4}</div>
-      <div class="avatar-s">${esc(r.name.slice(0,1))}</div>
-      <div class="col-name"><div class="nm">${esc(r.name)}</div>
-        <div class="sub-info">+${r.plus} / -${r.minus}</div></div>
-      <div class="pts"><div class="v ${r.v>0?'up':r.v<0?'down':''}">${r.v>0?'+':''}${r.v}</div>
-        <div class="d">分</div></div>`;
-    d.onclick = ()=>openDrawer(r.uid);
-    list.appendChild(d);
+
+  $('#orderBtn').addEventListener('click', () => {
+    reverseOrder = !reverseOrder;
+    const btn = $('#orderBtn');
+    btn.textContent = reverseOrder ? '倒序' : '正序';
+    btn.classList.toggle('active', reverseOrder);
+    btn.setAttribute('aria-pressed', String(reverseOrder));
+    render();
   });
-}
 
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-
-async function openDrawer(uid){
-  const d = await fetch(`/api/member?gid=${encodeURIComponent(gid)}&uid=${encodeURIComponent(uid)}`).then(r=>r.json()).catch(()=>null);
-  if(!d || !d.name) return;
-  $('#dName').textContent = d.name;
-  $('#dUid').textContent = 'QQ ' + d.uid;
-  $('#dTotal').textContent = d.total;
-  $('#dWeek').textContent = (d.week_delta>0?'+':'') + d.week_delta;
-  $('#dWeek').style.color = d.week_delta>0?'var(--plus)':d.week_delta<0?'var(--minus)':'var(--text)';
-  $('#dPM').textContent = `${d.plus}/${d.minus}`;
-  const rc = $('#dRecords'); rc.innerHTML='';
-  (d.records||[]).forEach(r=>{
-    const div=document.createElement('div'); div.className='rec';
-    div.innerHTML = `<div class="l1"><b class="${r.delta>0?'up-c':'down-c'}">${r.delta>0?'+':''}${r.delta}</b>
-      ${esc(r.reason||'')}</div>
-      <div class="l2">${esc(r.created_at||'')} · by ${esc(r.operator_name||'?')}</div>`;
-    rc.appendChild(div);
+  $('#refreshBtn').addEventListener('click', () => {
+    load({ showSpinner: false, refreshGroups: true });
   });
-  if(!(d.records||[]).length) rc.innerHTML='<div class="empty" style="padding:20px">暂无记录</div>';
-  $('#drawer').classList.add('open'); $('#mask').classList.add('open');
-}
-function closeDrawer(){ $('#drawer').classList.remove('open'); $('#mask').classList.remove('open'); }
 
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-  b.classList.add('active'); tab=b.dataset.tab; render();
-});
-$('#groupSel').onchange = e=>{ gid=e.target.value; load(); };
-$('#search').oninput = render;
-$('#drawerClose').onclick = closeDrawer;
-$('#mask').onclick = closeDrawer;
+  $('#retryBtn').addEventListener('click', () => {
+    load({ showSpinner: true, refreshGroups: true });
+  });
 
-(async function init(){
-  await loadGroups(); await load();
-  timer = setInterval(load, 30000);
+  $('#groupSel').addEventListener('change', (e) => {
+    gid = e.target.value;
+    load({ showSpinner: true });
+  });
+
+  $('#search').addEventListener('input', render);
+  $('#drawerClose').addEventListener('click', closeDrawer);
+  $('#mask').addEventListener('click', closeDrawer);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('#drawer').classList.contains('open')) {
+      closeDrawer();
+    }
+  });
+
+  function startAutoRefresh() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        load({ showSpinner: false, refreshGroups: true });
+      }
+    }, 30000);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      load({ showSpinner: false, refreshGroups: true });
+    }
+  });
+
+  (async function init() {
+    await loadGroups(false);
+    await load({ showSpinner: true });
+    startAutoRefresh();
+  })();
 })();
 </script>
 </body>

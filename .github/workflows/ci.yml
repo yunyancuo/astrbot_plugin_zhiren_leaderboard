@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint-and-test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装测试与检查依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aiohttp pytest pyyaml ruff
+
+      - name: 运行 Ruff 静态检查
+        run: ruff check .
+
+      - name: 运行 Pytest 自动化测试
+        run: pytest -v
